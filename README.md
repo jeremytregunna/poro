@@ -1,6 +1,8 @@
-# Poro 🗂️
+# Poro -- A demonstration cache in Zig
 
 A lightning-fast, key-value database written in Zig.
+
+NOTE: This is **NOT** a production ready database, using it as such would be silly. It's an exploration of io_uring mostly, but released as a demonstration.
 
 Built to demonstrate Zig's usefulness for databases, providing for simplicity, speed, and reliability.
 
@@ -161,17 +163,21 @@ Poro provides clear error messages for common issues:
 - **Basic commands** - Only SET/GET/DEL operations
 - **No networking** - CLI interface only
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
-
 ## License
 
-MIT License - see LICENSE file for details.
+Copyright 2025 Jeremy Tregunna
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+[https://www.apache.org/licenses/LICENSE-2.0](https://www.apache.org/licenses/LICENSE-2.0)
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 ## Why Poro?
 
