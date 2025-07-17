@@ -1,0 +1,14 @@
+/porodb
+/porodb.exe
+*_*.porodb.*
+*_*.porodb
+.zig-cache/
+zig-cache/
+zig-out/
+
+tools/
+
+*.wal
+
+# Death to .DS_Store
+.DS_Store
