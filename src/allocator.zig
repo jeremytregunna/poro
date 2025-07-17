@@ -1,5 +1,3 @@
-//! ABOUTME: Static allocator with state machine for memory management
-//! ABOUTME: Provides allocate/frozen/deallocate states for controlled memory access
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;

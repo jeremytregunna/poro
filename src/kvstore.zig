@@ -1,5 +1,3 @@
-//! ABOUTME: High-performance key-value store with hash table and WAL integration
-//! ABOUTME: Redis-compatible storage engine with SET, GET, and DEL operations
 const std = @import("std");
 const allocator_mod = @import("allocator.zig");
 const wal_mod = @import("wal.zig");

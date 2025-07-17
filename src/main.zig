@@ -1,6 +1,3 @@
-//! ABOUTME: Main entry point for Poro key-value database server
-//! ABOUTME: Redis-compatible CLI interface with SET, GET, and DEL commands
-
 const std = @import("std");
 const allocator_mod = @import("allocator.zig");
 const kvstore_mod = @import("kvstore.zig");
