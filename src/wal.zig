@@ -1,3 +1,5 @@
+// ABOUTME: Write-ahead logging implementation with dual rings for intent and completion tracking
+// ABOUTME: Provides crash recovery capabilities with verification of successful operations
 const std = @import("std");
 const linux = std.os.linux;
 const io_uring = linux.IoUring;
@@ -23,49 +25,79 @@ pub const WALEntry = struct {
     }
 };
 
+pub const CompletionEntry = struct {
+    intent_offset: u32,
+    timestamp: i64,
+    status: Status,
+    checksum: u32,
+
+    pub const Status = enum(u8) {
+        success = 0,
+        io_error = 1,
+        checksum_error = 2,
+    };
+};
+
 pub const WAL = struct {
-    ring: io_uring,
-    file_fd: std.posix.fd_t,
-    buffer: []u8,
-    write_offset: u32,
-    read_offset: u32,
+    intent_ring: io_uring,
+    completion_ring: io_uring,
+    intent_file_fd: std.posix.fd_t,
+    completion_file_fd: std.posix.fd_t,
+    intent_buffer: []u8,
+    completion_buffer: []u8,
+    intent_write_offset: u32,
+    intent_read_offset: u32,
+    completion_write_offset: u32,
+    completion_read_offset: u32,
     allocator: Allocator,
     is_full: bool,
 
-    pub fn init(allocator: Allocator, file_path: []const u8) !WAL {
-        var ring = try io_uring.init(MAX_ENTRIES, 0);
-        errdefer ring.deinit();
+    pub fn init(allocator: Allocator, intent_file_path: []const u8, completion_file_path: []const u8) !WAL {
+        var intent_ring = try io_uring.init(MAX_ENTRIES, 0);
+        errdefer intent_ring.deinit();
 
-        const file_fd = try std.posix.openat(
-            std.posix.AT.FDCWD,
-            file_path,
-            .{ .ACCMODE = .RDWR, .CREAT = true },
-            0o644
-        );
-        errdefer std.posix.close(file_fd);
+        var completion_ring = try io_uring.init(MAX_ENTRIES, 0);
+        errdefer completion_ring.deinit();
+
+        const intent_file_fd = try std.posix.openat(std.posix.AT.FDCWD, intent_file_path, .{ .ACCMODE = .RDWR, .CREAT = true }, 0o644);
+        errdefer std.posix.close(intent_file_fd);
+
+        const completion_file_fd = try std.posix.openat(std.posix.AT.FDCWD, completion_file_path, .{ .ACCMODE = .RDWR, .CREAT = true }, 0o644);
+        errdefer std.posix.close(completion_file_fd);
 
         const page_size = 4096; // Standard page size on most systems
-        const buffer = try allocator.alignedAlloc(u8, page_size, WAL_SIZE);
-        errdefer allocator.free(buffer);
+        const intent_buffer = try allocator.alignedAlloc(u8, page_size, WAL_SIZE);
+        errdefer allocator.free(intent_buffer);
+
+        const completion_buffer = try allocator.alignedAlloc(u8, page_size, WAL_SIZE);
+        errdefer allocator.free(completion_buffer);
 
         return WAL{
-            .ring = ring,
-            .file_fd = file_fd,
-            .buffer = buffer,
-            .write_offset = 0,
-            .read_offset = 0,
+            .intent_ring = intent_ring,
+            .completion_ring = completion_ring,
+            .intent_file_fd = intent_file_fd,
+            .completion_file_fd = completion_file_fd,
+            .intent_buffer = intent_buffer,
+            .completion_buffer = completion_buffer,
+            .intent_write_offset = 0,
+            .intent_read_offset = 0,
+            .completion_write_offset = 0,
+            .completion_read_offset = 0,
             .allocator = allocator,
             .is_full = false,
         };
     }
 
     pub fn deinit(self: *WAL) void {
-        self.ring.deinit();
-        std.posix.close(self.file_fd);
-        self.allocator.free(self.buffer);
+        self.intent_ring.deinit();
+        self.completion_ring.deinit();
+        std.posix.close(self.intent_file_fd);
+        std.posix.close(self.completion_file_fd);
+        self.allocator.free(self.intent_buffer);
+        self.allocator.free(self.completion_buffer);
     }
 
-    pub fn append_entry(self: *WAL, operation: WALEntry.Operation, key: []const u8, value: []const u8) !void {
+    pub fn append_entry(self: *WAL, operation: WALEntry.Operation, key: []const u8, value: []const u8) !u32 {
         const entry = WALEntry{
             .timestamp = std.time.timestamp(),
             .operation = operation,
@@ -74,138 +106,271 @@ pub const WAL = struct {
         };
 
         const total_size = entry.total_size();
+        const intent_offset = self.intent_write_offset;
 
-        // Check if we have space in the ring buffer
-        if (self.write_offset + total_size > WAL_SIZE) {
-            if (self.read_offset > 0) {
+        // Check if we have space in the intent ring buffer
+        if (self.intent_write_offset + total_size > WAL_SIZE) {
+            if (self.intent_read_offset > 0) {
                 // Wrap around
-                self.write_offset = 0;
+                self.intent_write_offset = 0;
             } else {
                 // Buffer is full, need to flush
-                try self.flush();
-                self.write_offset = 0;
-                self.read_offset = 0;
+                try self.flush_intent();
+                self.intent_write_offset = 0;
+                self.intent_read_offset = 0;
                 self.is_full = false;
             }
         }
 
         // Write entry header
-        std.mem.copyForwards(u8, self.buffer[self.write_offset..], std.mem.asBytes(&entry));
-        self.write_offset += @sizeOf(WALEntry);
+        std.mem.copyForwards(u8, self.intent_buffer[self.intent_write_offset..], std.mem.asBytes(&entry));
+        self.intent_write_offset += @sizeOf(WALEntry);
 
         // Write key
-        std.mem.copyForwards(u8, self.buffer[self.write_offset..], key);
-        self.write_offset += entry.key_len;
+        std.mem.copyForwards(u8, self.intent_buffer[self.intent_write_offset..], key);
+        self.intent_write_offset += entry.key_len;
 
         // Write value
-        std.mem.copyForwards(u8, self.buffer[self.write_offset..], value);
-        self.write_offset += entry.value_len;
+        std.mem.copyForwards(u8, self.intent_buffer[self.intent_write_offset..], value);
+        self.intent_write_offset += entry.value_len;
 
         // Check if buffer is getting full (75% threshold)
-        if (self.write_offset > (WAL_SIZE * 3) / 4) {
-            try self.flush_async();
+        if (self.intent_write_offset > (WAL_SIZE * 3) / 4) {
+            try self.flush_intent_async();
+        }
+
+        return intent_offset;
+    }
+
+    pub fn append_completion(self: *WAL, intent_offset: u32, status: CompletionEntry.Status, checksum: u32) !void {
+        const completion = CompletionEntry{
+            .intent_offset = intent_offset,
+            .timestamp = std.time.timestamp(),
+            .status = status,
+            .checksum = checksum,
+        };
+
+        const completion_size = @sizeOf(CompletionEntry);
+
+        // Check if we have space in the completion ring buffer
+        if (self.completion_write_offset + completion_size > WAL_SIZE) {
+            if (self.completion_read_offset > 0) {
+                // Wrap around
+                self.completion_write_offset = 0;
+            } else {
+                // Buffer is full, need to flush
+                try self.flush_completion();
+                self.completion_write_offset = 0;
+                self.completion_read_offset = 0;
+            }
+        }
+
+        // Write completion entry
+        std.mem.copyForwards(u8, self.completion_buffer[self.completion_write_offset..], std.mem.asBytes(&completion));
+        self.completion_write_offset += completion_size;
+
+        // Check if buffer is getting full (75% threshold)
+        if (self.completion_write_offset > (WAL_SIZE * 3) / 4) {
+            try self.flush_completion_async();
         }
     }
 
-    fn flush_async(self: *WAL) !void {
-        const write_sqe = try self.ring.write(0, self.file_fd, self.buffer[self.read_offset..self.write_offset], 0);
+    fn flush_intent_async(self: *WAL) !void {
+        const write_sqe = try self.intent_ring.write(0, self.intent_file_fd, self.intent_buffer[self.intent_read_offset..self.intent_write_offset], 0);
         _ = write_sqe;
 
-        const submitted = try self.ring.submit();
+        const submitted = try self.intent_ring.submit();
         _ = submitted;
 
         // Don't wait for completion in async mode
     }
 
-    pub fn flush(self: *WAL) !void {
-        if (self.write_offset == self.read_offset) return;
-
-        const write_sqe = try self.ring.write(0, self.file_fd, self.buffer[self.read_offset..self.write_offset], 0);
+    fn flush_completion_async(self: *WAL) !void {
+        const write_sqe = try self.completion_ring.write(0, self.completion_file_fd, self.completion_buffer[self.completion_read_offset..self.completion_write_offset], 0);
         _ = write_sqe;
 
-        const submitted = try self.ring.submit();
+        const submitted = try self.completion_ring.submit();
+        _ = submitted;
+
+        // Don't wait for completion in async mode
+    }
+
+    pub fn flush_intent(self: *WAL) !void {
+        if (self.intent_write_offset == self.intent_read_offset) return;
+
+        const write_sqe = try self.intent_ring.write(0, self.intent_file_fd, self.intent_buffer[self.intent_read_offset..self.intent_write_offset], 0);
+        _ = write_sqe;
+
+        const submitted = try self.intent_ring.submit();
         _ = submitted;
 
         // Wait for completion
-        var cqe: linux.io_uring_cqe = try self.ring.copy_cqe();
-        defer self.ring.cqe_seen(&cqe);
+        var cqe: linux.io_uring_cqe = try self.intent_ring.copy_cqe();
+        defer self.intent_ring.cqe_seen(&cqe);
 
         if (cqe.res < 0) {
             return std.posix.unexpectedErrno(@enumFromInt(@as(u32, @bitCast(-cqe.res))));
         }
 
-        self.read_offset = self.write_offset;
+        self.intent_read_offset = self.intent_write_offset;
     }
 
-    pub fn recovery_read(self: *WAL, callback: fn(operation: WALEntry.Operation, key: []const u8, value: []const u8) void) !void {
-        // Read the entire WAL file for recovery
-        const file = std.fs.File{ .handle = self.file_fd };
-        const file_size = try file.getEndPos();
-        try file.seekTo(0);
+    pub fn flush_completion(self: *WAL) !void {
+        if (self.completion_write_offset == self.completion_read_offset) return;
 
-        if (file_size == 0) return;
+        const write_sqe = try self.completion_ring.write(0, self.completion_file_fd, self.completion_buffer[self.completion_read_offset..self.completion_write_offset], 0);
+        _ = write_sqe;
 
-        const read_buffer = try self.allocator.alloc(u8, @intCast(file_size));
-        defer self.allocator.free(read_buffer);
+        const submitted = try self.completion_ring.submit();
+        _ = submitted;
 
-        _ = try std.posix.read(self.file_fd, read_buffer);
+        // Wait for completion
+        var cqe: linux.io_uring_cqe = try self.completion_ring.copy_cqe();
+        defer self.completion_ring.cqe_seen(&cqe);
 
-        var offset: usize = 0;
-        while (offset < read_buffer.len) {
-            if (offset + @sizeOf(WALEntry) > read_buffer.len) break;
-
-            const entry_ptr: *const WALEntry = @ptrCast(@alignCast(&read_buffer[offset]));
-            offset += @sizeOf(WALEntry);
-
-            if (offset + entry_ptr.key_len + entry_ptr.value_len > read_buffer.len) break;
-
-            const key = read_buffer[offset..offset + entry_ptr.key_len];
-            offset += entry_ptr.key_len;
-
-            const value = read_buffer[offset..offset + entry_ptr.value_len];
-            offset += entry_ptr.value_len;
-
-            callback(entry_ptr.operation, key, value);
+        if (cqe.res < 0) {
+            return std.posix.unexpectedErrno(@enumFromInt(@as(u32, @bitCast(-cqe.res))));
         }
+
+        self.completion_read_offset = self.completion_write_offset;
+    }
+
+    pub fn flush(self: *WAL) !void {
+        try self.flush_intent();
+        try self.flush_completion();
+    }
+
+    pub fn recovery_read(self: *WAL, callback: fn (operation: WALEntry.Operation, key: []const u8, value: []const u8, completed: bool) void) !void {
+        // Read the intent file
+        const intent_file = std.fs.File{ .handle = self.intent_file_fd };
+        const intent_file_size = try intent_file.getEndPos();
+        try intent_file.seekTo(0);
+
+        if (intent_file_size == 0) return;
+
+        const intent_buffer = try self.allocator.alloc(u8, @intCast(intent_file_size));
+        defer self.allocator.free(intent_buffer);
+
+        _ = try std.posix.read(self.intent_file_fd, intent_buffer);
+
+        // Read the completion file
+        const completion_file = std.fs.File{ .handle = self.completion_file_fd };
+        const completion_file_size = try completion_file.getEndPos();
+        try completion_file.seekTo(0);
+
+        var completion_map = std.HashMap(u32, CompletionEntry, std.hash_map.AutoContext(u32), std.hash_map.default_max_load_percentage).init(self.allocator);
+        defer completion_map.deinit();
+
+        if (completion_file_size > 0) {
+            const completion_buffer = try self.allocator.alloc(u8, @intCast(completion_file_size));
+            defer self.allocator.free(completion_buffer);
+
+            _ = try std.posix.read(self.completion_file_fd, completion_buffer);
+
+            // Build completion map
+            var completion_offset: usize = 0;
+            while (completion_offset + @sizeOf(CompletionEntry) <= completion_buffer.len) {
+                const completion_ptr: *const CompletionEntry = @ptrCast(@alignCast(&completion_buffer[completion_offset]));
+                try completion_map.put(completion_ptr.intent_offset, completion_ptr.*);
+                completion_offset += @sizeOf(CompletionEntry);
+            }
+        }
+
+        // Process intent entries and check completion status
+        var intent_offset: usize = 0;
+        while (intent_offset < intent_buffer.len) {
+            if (intent_offset + @sizeOf(WALEntry) > intent_buffer.len) break;
+
+            const entry_ptr: *const WALEntry = @ptrCast(@alignCast(&intent_buffer[intent_offset]));
+            const entry_start_offset = intent_offset;
+            intent_offset += @sizeOf(WALEntry);
+
+            if (intent_offset + entry_ptr.key_len + entry_ptr.value_len > intent_buffer.len) break;
+
+            const key = intent_buffer[intent_offset .. intent_offset + entry_ptr.key_len];
+            intent_offset += entry_ptr.key_len;
+
+            const value = intent_buffer[intent_offset .. intent_offset + entry_ptr.value_len];
+            intent_offset += entry_ptr.value_len;
+
+            // Check if this operation was completed successfully
+            const completed = if (completion_map.get(@intCast(entry_start_offset))) |completion|
+                completion.status == .success
+            else
+                false;
+
+            callback(entry_ptr.operation, key, value, completed);
+        }
+    }
+
+    pub fn calculate_checksum(key: []const u8, value: []const u8) u32 {
+        var hasher = std.hash.Crc32.init();
+        hasher.update(key);
+        hasher.update(value);
+        return hasher.final();
     }
 };
 
 test "WAL basic operations" {
-    const test_file = "/tmp/test_wal.log";
-    std.fs.deleteFileAbsolute(test_file) catch {};
+    const test_intent_file = "/tmp/test_wal_intent.log";
+    const test_completion_file = "/tmp/test_wal_completion.log";
+    std.fs.deleteFileAbsolute(test_intent_file) catch {};
+    std.fs.deleteFileAbsolute(test_completion_file) catch {};
 
-    var wal = try WAL.init(std.testing.allocator, test_file);
+    var wal = try WAL.init(std.testing.allocator, test_intent_file, test_completion_file);
     defer wal.deinit();
-    defer std.fs.deleteFileAbsolute(test_file) catch {};
+    defer std.fs.deleteFileAbsolute(test_intent_file) catch {};
+    defer std.fs.deleteFileAbsolute(test_completion_file) catch {};
 
-    try wal.append_entry(.set, "key1", "value1");
-    try wal.append_entry(.set, "key2", "value2");
-    try wal.append_entry(.del, "key1", "");
+    const offset1 = try wal.append_entry(.set, "key1", "value1");
+    const offset2 = try wal.append_entry(.set, "key2", "value2");
+    const offset3 = try wal.append_entry(.del, "key1", "");
+
+    try wal.flush();
+
+    // Mark some operations as completed
+    const checksum1 = WAL.calculate_checksum("key1", "value1");
+    const checksum2 = WAL.calculate_checksum("key2", "value2");
+    try wal.append_completion(offset1, .success, checksum1);
+    try wal.append_completion(offset2, .success, checksum2);
+    // Demonstrate incomplete operation - offset3 is not marked as completed
+    // This simulates a crash between intent logging and completion logging
+    const incomplete_offset = offset3;
 
     try wal.flush();
 
     // Test recovery
     const TestState = struct {
         var recovered_entries: u32 = 0;
+        var completed_entries: u32 = 0;
         var last_operation: WALEntry.Operation = .set;
         var last_key: [64]u8 = undefined;
         var last_value: [64]u8 = undefined;
         var last_key_len: usize = 0;
         var last_value_len: usize = 0;
+        var last_completed: bool = false;
 
-        fn callback(operation: WALEntry.Operation, key: []const u8, value: []const u8) void {
+        fn callback(operation: WALEntry.Operation, key: []const u8, value: []const u8, completed: bool) void {
             recovered_entries += 1;
+            if (completed) completed_entries += 1;
             last_operation = operation;
             last_key_len = @min(key.len, last_key.len);
             last_value_len = @min(value.len, last_value.len);
+            last_completed = completed;
             std.mem.copyForwards(u8, last_key[0..last_key_len], key[0..last_key_len]);
             std.mem.copyForwards(u8, last_value[0..last_value_len], value[0..last_value_len]);
         }
     };
 
     TestState.recovered_entries = 0;
+    TestState.completed_entries = 0;
     try wal.recovery_read(TestState.callback);
     try std.testing.expect(TestState.recovered_entries == 3);
+    try std.testing.expect(TestState.completed_entries == 2); // Only first two operations were completed
     try std.testing.expect(TestState.last_operation == .del);
+    try std.testing.expect(TestState.last_completed == false); // Last operation was not completed
     try std.testing.expectEqualStrings("key1", TestState.last_key[0..TestState.last_key_len]);
+
+    // Verify the incomplete operation offset is what we expect
+    try std.testing.expect(incomplete_offset > 0);
 }

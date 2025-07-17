@@ -9,8 +9,9 @@ pub fn main() !void {
     var static_alloc = allocator_mod.StaticAllocator.init(arena.allocator());
     defer static_alloc.deinit();
 
-    const wal_file = "poro.wal";
-    var store = try kvstore_mod.KVStore.init(static_alloc.allocator(), wal_file);
+    const wal_intent_file = "poro_intent.wal";
+    const wal_completion_file = "poro_completion.wal";
+    var store = try kvstore_mod.KVStore.init(static_alloc.allocator(), wal_intent_file, wal_completion_file);
     defer store.deinit();
 
     const stdout = std.io.getStdOut().writer();
@@ -54,7 +55,6 @@ pub fn main() !void {
                 continue;
             };
             try stdout.print("OK\n> ", .{});
-
         } else if (std.ascii.eqlIgnoreCase(command, "GET")) {
             const key = parts.next() orelse {
                 try stdout.print("ERR: GET requires key\n> ", .{});
@@ -66,7 +66,6 @@ pub fn main() !void {
             } else {
                 try stdout.print("(nil)\n> ", .{});
             }
-
         } else if (std.ascii.eqlIgnoreCase(command, "DEL")) {
             const key = parts.next() orelse {
                 try stdout.print("ERR: DEL requires key\n> ", .{});
@@ -83,10 +82,8 @@ pub fn main() !void {
             } else {
                 try stdout.print("(integer) 0\n> ", .{});
             }
-
         } else {
             try stdout.print("ERR: Unknown command '{}'. Available: SET, GET, DEL, QUIT\n> ", .{std.zig.fmtEscapes(command)});
         }
     }
 }
-

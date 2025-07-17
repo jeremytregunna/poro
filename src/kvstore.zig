@@ -36,13 +36,13 @@ pub const KVStore = struct {
     allocator: Allocator,
     wal: wal_mod.WAL,
 
-    pub fn init(allocator: Allocator, wal_file_path: []const u8) !KVStore {
+    pub fn init(allocator: Allocator, wal_intent_path: []const u8, wal_completion_path: []const u8) !KVStore {
         const entries = try allocator.alloc(?KVEntry, INITIAL_CAPACITY);
         for (entries) |*entry| {
             entry.* = null;
         }
 
-        const wal = try wal_mod.WAL.init(allocator, wal_file_path);
+        const wal = try wal_mod.WAL.init(allocator, wal_intent_path, wal_completion_path);
 
         var store = KVStore{
             .entries = entries,
@@ -69,8 +69,8 @@ pub const KVStore = struct {
     }
 
     pub fn set(self: *KVStore, key: []const u8, value: []const u8) !void {
-        // Log to WAL first
-        try self.wal.append_entry(.set, key, value);
+        // Log intent to WAL first
+        const intent_offset = try self.wal.append_entry(.set, key, value);
 
         const hash = hash_key(key);
         const index = self.find_slot(hash, key);
@@ -90,6 +90,10 @@ pub const KVStore = struct {
                 try self.resize();
             }
         }
+
+        // Log completion after successful write
+        const checksum = wal_mod.WAL.calculate_checksum(key, value);
+        try self.wal.append_completion(intent_offset, .success, checksum);
     }
 
     pub fn get(self: *KVStore, key: []const u8) ?[]const u8 {
@@ -105,20 +109,26 @@ pub const KVStore = struct {
     }
 
     pub fn del(self: *KVStore, key: []const u8) !bool {
-        // Log to WAL first
-        try self.wal.append_entry(.del, key, "");
+        // Log intent to WAL first
+        const intent_offset = try self.wal.append_entry(.del, key, "");
 
         const hash = hash_key(key);
         const index = self.find_slot(hash, key);
 
+        var deleted = false;
         if (self.entries[index]) |*entry| {
             if (!entry.is_deleted and std.mem.eql(u8, entry.key, key)) {
                 entry.is_deleted = true;
                 self.size -= 1;
-                return true;
+                deleted = true;
             }
         }
-        return false;
+
+        // Log completion after operation
+        const checksum = wal_mod.WAL.calculate_checksum(key, "");
+        try self.wal.append_completion(intent_offset, .success, checksum);
+
+        return deleted;
     }
 
     pub fn flush_wal(self: *KVStore) !void {
@@ -167,11 +177,14 @@ pub const KVStore = struct {
         const RecoveryState = struct {
             var store_ptr: ?*KVStore = null;
 
-            fn callback(operation: wal_mod.WALEntry.Operation, key: []const u8, value: []const u8) void {
+            fn callback(operation: wal_mod.WALEntry.Operation, key: []const u8, value: []const u8, completed: bool) void {
                 if (store_ptr) |store| {
-                    switch (operation) {
-                        .set => store.set_without_wal(key, value) catch {},
-                        .del => _ = store.del_without_wal(key) catch {},
+                    // Only apply operations that were completed successfully
+                    if (completed) {
+                        switch (operation) {
+                            .set => store.set_without_wal(key, value) catch {},
+                            .del => _ = store.del_without_wal(key) catch {},
+                        }
                     }
                 }
             }
@@ -222,11 +235,14 @@ fn hash_key(key: []const u8) u64 {
 }
 
 test "KVStore basic operations" {
-    const test_wal_file = "/tmp/test_kvstore.wal";
-    std.fs.deleteFileAbsolute(test_wal_file) catch {};
-    defer std.fs.deleteFileAbsolute(test_wal_file) catch {};
+    const test_wal_intent = "/tmp/test_kvstore_intent.wal";
+    const test_wal_completion = "/tmp/test_kvstore_completion.wal";
+    std.fs.deleteFileAbsolute(test_wal_intent) catch {};
+    std.fs.deleteFileAbsolute(test_wal_completion) catch {};
+    defer std.fs.deleteFileAbsolute(test_wal_intent) catch {};
+    defer std.fs.deleteFileAbsolute(test_wal_completion) catch {};
 
-    var store = try KVStore.init(std.testing.allocator, test_wal_file);
+    var store = try KVStore.init(std.testing.allocator, test_wal_intent, test_wal_completion);
     defer store.deinit();
 
     // Test SET and GET

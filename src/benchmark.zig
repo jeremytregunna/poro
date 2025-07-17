@@ -18,15 +18,11 @@ const BenchmarkResult = struct {
     pub fn print(self: BenchmarkResult) void {
         const stdout = std.io.getStdOut().writer();
         stdout.print("Benchmark Results:\n", .{}) catch {};
-        stdout.print("  Keys: {}, Key Size: {} bytes, Value Size: {} bytes\n", .{
-            self.config.num_keys, self.config.key_size, self.config.value_size
-        }) catch {};
+        stdout.print("  Keys: {}, Key Size: {} bytes, Value Size: {} bytes\n", .{ self.config.num_keys, self.config.key_size, self.config.value_size }) catch {};
         stdout.print("  Total Time: {d:.2} ms\n", .{@as(f64, @floatFromInt(self.total_time_ns)) / 1_000_000.0}) catch {};
         stdout.print("  Keys/Second: {d:.0}\n", .{self.keys_per_second}) catch {};
         stdout.print("  Avg Time/Key: {d:.2} μs\n", .{@as(f64, @floatFromInt(self.avg_time_per_key_ns)) / 1000.0}) catch {};
-        stdout.print("  Memory Usage: ~{d:.1} MB\n", .{
-            @as(f64, @floatFromInt(self.config.num_keys * (self.config.key_size + self.config.value_size))) / (1024.0 * 1024.0)
-        }) catch {};
+        stdout.print("  Memory Usage: ~{d:.1} MB\n", .{@as(f64, @floatFromInt(self.config.num_keys * (self.config.key_size + self.config.value_size))) / (1024.0 * 1024.0)}) catch {};
         stdout.print("\n", .{}) catch {};
     }
 };
@@ -75,17 +71,18 @@ fn generate_value(allocator: std.mem.Allocator, index: u32, size: u32) ![]u8 {
 fn run_benchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) !BenchmarkResult {
     const stdout = std.io.getStdOut().writer();
 
-    // Clean up any existing WAL file
-    const wal_file = "/tmp/benchmark.wal";
-    std.fs.deleteFileAbsolute(wal_file) catch {};
-    defer std.fs.deleteFileAbsolute(wal_file) catch {};
+    // Clean up any existing WAL files
+    const wal_intent_file = "/tmp/benchmark_intent.wal";
+    const wal_completion_file = "/tmp/benchmark_completion.wal";
+    std.fs.deleteFileAbsolute(wal_intent_file) catch {};
+    std.fs.deleteFileAbsolute(wal_completion_file) catch {};
+    defer std.fs.deleteFileAbsolute(wal_intent_file) catch {};
+    defer std.fs.deleteFileAbsolute(wal_completion_file) catch {};
 
-    var store = try kvstore_mod.KVStore.init(allocator, wal_file);
+    var store = try kvstore_mod.KVStore.init(allocator, wal_intent_file, wal_completion_file);
     defer store.deinit();
 
-    try stdout.print("Starting benchmark: {} keys, key_size={}, value_size={}\n", .{
-        config.num_keys, config.key_size, config.value_size
-    });
+    try stdout.print("Starting benchmark: {} keys, key_size={}, value_size={}\n", .{ config.num_keys, config.key_size, config.value_size });
 
     const start_time = std.time.nanoTimestamp();
 
