@@ -270,12 +270,14 @@ pub const WAL = struct {
             // Build completion map
             var completion_offset: usize = 0;
             while (completion_offset + @sizeOf(CompletionEntry) <= completion_buffer.len) {
-                if (completion_offset % @alignOf(CompletionEntry) != 0) {
-                    completion_offset += 1;
-                    continue;
+                // Read completion entry by copying bytes (no alignment assumptions)
+                var completion: CompletionEntry = undefined;
+                std.mem.copyForwards(u8, std.mem.asBytes(&completion), completion_buffer[completion_offset..completion_offset + @sizeOf(CompletionEntry)]);
+                
+                // Validate completion entry - if the intent_offset is suspiciously large, skip this entry
+                if (completion.intent_offset < @as(u32, @intCast(intent_file_size))) {
+                    try completion_map.put(completion.intent_offset, completion);
                 }
-                const completion_ptr: *const CompletionEntry = @ptrCast(@alignCast(&completion_buffer[completion_offset]));
-                try completion_map.put(completion_ptr.intent_offset, completion_ptr.*);
                 completion_offset += @sizeOf(CompletionEntry);
             }
         }
@@ -285,21 +287,19 @@ pub const WAL = struct {
         while (intent_offset < intent_buffer.len) {
             if (intent_offset + @sizeOf(WALEntry) > intent_buffer.len) break;
 
-            if (intent_offset % @alignOf(WALEntry) != 0) {
-                intent_offset += 1;
-                continue;
-            }
-            const entry_ptr: *const WALEntry = @ptrCast(@alignCast(&intent_buffer[intent_offset]));
+            // Read entry header by copying bytes (no alignment assumptions)
+            var entry: WALEntry = undefined;
+            std.mem.copyForwards(u8, std.mem.asBytes(&entry), intent_buffer[intent_offset..intent_offset + @sizeOf(WALEntry)]);
             const entry_start_offset = intent_offset;
             intent_offset += @sizeOf(WALEntry);
 
-            if (intent_offset + entry_ptr.key_len + entry_ptr.value_len > intent_buffer.len) break;
+            if (intent_offset + entry.key_len + entry.value_len > intent_buffer.len) break;
 
-            const key = intent_buffer[intent_offset .. intent_offset + entry_ptr.key_len];
-            intent_offset += entry_ptr.key_len;
+            const key = intent_buffer[intent_offset .. intent_offset + entry.key_len];
+            intent_offset += entry.key_len;
 
-            const value = intent_buffer[intent_offset .. intent_offset + entry_ptr.value_len];
-            intent_offset += entry_ptr.value_len;
+            const value = intent_buffer[intent_offset .. intent_offset + entry.value_len];
+            intent_offset += entry.value_len;
 
             // Check if this operation was completed successfully
             const completed = if (completion_map.get(@intCast(entry_start_offset))) |completion|
@@ -307,7 +307,7 @@ pub const WAL = struct {
             else
                 false;
 
-            callback(entry_ptr.operation, key, value, completed);
+            callback(entry.operation, key, value, completed);
         }
     }
 
