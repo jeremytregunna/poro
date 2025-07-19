@@ -92,4 +92,52 @@ pub fn build(b: *std.Build) void {
 
     const benchmark_step = b.step("benchmark", "Run performance benchmark");
     benchmark_step.dependOn(&run_benchmark.step);
+
+    // Add property testing runner executable
+    const prop_runner_mod = b.createModule(.{
+        .root_source_file = b.path("src/prop_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const prop_runner = b.addExecutable(.{
+        .name = "prop_runner",
+        .root_module = prop_runner_mod,
+    });
+
+    b.installArtifact(prop_runner);
+
+    const run_prop_runner = b.addRunArtifact(prop_runner);
+    run_prop_runner.step.dependOn(b.getInstallStep());
+
+    const prop_step = b.step("prop", "Run property-based tests");
+    prop_step.dependOn(&run_prop_runner.step);
+
+    // Add property testing unit tests
+    const prop_unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/property_testing.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    const run_prop_unit_tests = b.addRunArtifact(prop_unit_tests);
+    test_step.dependOn(&run_prop_unit_tests.step);
+
+    // Add library target for external use
+    const lib = b.addStaticLibrary(.{
+        .name = "poro",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    b.installArtifact(lib);
+
+    // Add simulation step as alias for property-based testing
+    const sim_step = b.step("sim", "Run deterministic simulation testing (property-based)");
+    sim_step.dependOn(&run_prop_runner.step);
 }

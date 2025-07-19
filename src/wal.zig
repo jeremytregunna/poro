@@ -110,11 +110,11 @@ pub const WAL = struct {
 
         // Check if we have space in the intent ring buffer
         if (self.intent_write_offset + total_size > WAL_SIZE) {
-            if (self.intent_read_offset > 0) {
-                // Wrap around
+            if (self.intent_read_offset >= total_size) {
+                // Wrap around - there's enough space at the beginning
                 self.intent_write_offset = 0;
             } else {
-                // Buffer is full, need to flush
+                // Not enough space to wrap around, need to flush
                 try self.flush_intent();
                 self.intent_write_offset = 0;
                 self.intent_read_offset = 0;
@@ -240,13 +240,13 @@ pub const WAL = struct {
         try self.flush_completion();
     }
 
-    pub fn recovery_read(self: *WAL, callback: fn (operation: WALEntry.Operation, key: []const u8, value: []const u8, completed: bool) void) !void {
+    pub fn recovery_read(self: *WAL, callback: fn (operation: WALEntry.Operation, key: []const u8, value: []const u8, completed: bool) void) !u64 {
         // Read the intent file
         const intent_file = std.fs.File{ .handle = self.intent_file_fd };
         const intent_file_size = try intent_file.getEndPos();
         try intent_file.seekTo(0);
 
-        if (intent_file_size == 0) return;
+        if (intent_file_size == 0) return 0;
 
         const intent_buffer = try self.allocator.alloc(u8, @intCast(intent_file_size));
         defer self.allocator.free(intent_buffer);
@@ -270,28 +270,59 @@ pub const WAL = struct {
             // Build completion map
             var completion_offset: usize = 0;
             while (completion_offset + @sizeOf(CompletionEntry) <= completion_buffer.len) {
-                const completion_ptr: *const CompletionEntry = @ptrCast(@alignCast(&completion_buffer[completion_offset]));
-                try completion_map.put(completion_ptr.intent_offset, completion_ptr.*);
+                // Read completion entry by copying bytes (no alignment assumptions)
+                var completion: CompletionEntry = undefined;
+                std.mem.copyForwards(u8, std.mem.asBytes(&completion), completion_buffer[completion_offset..completion_offset + @sizeOf(CompletionEntry)]);
+                
+                // Validate completion entry - if the intent_offset is suspiciously large, skip this entry
+                if (completion.intent_offset < @as(u32, @intCast(intent_file_size))) {
+                    try completion_map.put(completion.intent_offset, completion);
+                }
                 completion_offset += @sizeOf(CompletionEntry);
             }
         }
 
         // Process intent entries and check completion status
         var intent_offset: usize = 0;
+        var corruption_count: u64 = 0;
         while (intent_offset < intent_buffer.len) {
             if (intent_offset + @sizeOf(WALEntry) > intent_buffer.len) break;
 
-            const entry_ptr: *const WALEntry = @ptrCast(@alignCast(&intent_buffer[intent_offset]));
+            // Read entry header by copying bytes (no alignment assumptions)
+            var entry: WALEntry = undefined;
+            std.mem.copyForwards(u8, std.mem.asBytes(&entry), intent_buffer[intent_offset..intent_offset + @sizeOf(WALEntry)]);
             const entry_start_offset = intent_offset;
             intent_offset += @sizeOf(WALEntry);
 
-            if (intent_offset + entry_ptr.key_len + entry_ptr.value_len > intent_buffer.len) break;
+            // Validate entry fields for sanity
+            const operation_raw = @intFromEnum(entry.operation);
+            const max_reasonable_size = 1024 * 1024; // 1MB max for key or value
+            
+            if (operation_raw != 0 and operation_raw != 1) {
+                // WAL corruption detected - count and stop parsing
+                corruption_count += 1;
+                break;
+            }
+            
+            if (entry.key_len > max_reasonable_size or entry.value_len > max_reasonable_size) {
+                // WAL corruption detected - count and stop parsing
+                corruption_count += 1;
+                break;
+            }
+            
+            if (entry.timestamp < 0) {
+                // WAL corruption detected - count and stop parsing
+                corruption_count += 1;
+                break;
+            }
 
-            const key = intent_buffer[intent_offset .. intent_offset + entry_ptr.key_len];
-            intent_offset += entry_ptr.key_len;
+            if (intent_offset + entry.key_len + entry.value_len > intent_buffer.len) break;
 
-            const value = intent_buffer[intent_offset .. intent_offset + entry_ptr.value_len];
-            intent_offset += entry_ptr.value_len;
+            const key = intent_buffer[intent_offset .. intent_offset + entry.key_len];
+            intent_offset += entry.key_len;
+
+            const value = intent_buffer[intent_offset .. intent_offset + entry.value_len];
+            intent_offset += entry.value_len;
 
             // Check if this operation was completed successfully
             const completed = if (completion_map.get(@intCast(entry_start_offset))) |completion|
@@ -299,8 +330,10 @@ pub const WAL = struct {
             else
                 false;
 
-            callback(entry_ptr.operation, key, value, completed);
+            callback(entry.operation, key, value, completed);
         }
+        
+        return corruption_count;
     }
 
     pub fn calculate_checksum(key: []const u8, value: []const u8) u32 {

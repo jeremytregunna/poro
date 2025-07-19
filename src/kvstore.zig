@@ -36,13 +36,24 @@ pub const KVStore = struct {
     allocator: Allocator,
     wal: wal_mod.WAL,
 
+    pub const InitResult = struct {
+        store: KVStore,
+        corruption_count: u64,
+    };
+
     pub fn init(allocator: Allocator, wal_intent_path: []const u8, wal_completion_path: []const u8) !KVStore {
+        const result = try init_with_corruption_stats(allocator, wal_intent_path, wal_completion_path);
+        return result.store;
+    }
+
+    pub fn init_with_corruption_stats(allocator: Allocator, wal_intent_path: []const u8, wal_completion_path: []const u8) !InitResult {
         const entries = try allocator.alloc(?KVEntry, INITIAL_CAPACITY);
         for (entries) |*entry| {
             entry.* = null;
         }
 
-        const wal = try wal_mod.WAL.init(allocator, wal_intent_path, wal_completion_path);
+        var wal = try wal_mod.WAL.init(allocator, wal_intent_path, wal_completion_path);
+        errdefer wal.deinit();
 
         var store = KVStore{
             .entries = entries,
@@ -52,10 +63,16 @@ pub const KVStore = struct {
             .wal = wal,
         };
 
-        // Recover from WAL
-        try store.recover_from_wal();
+        // Recover from WAL - if this fails, errdefer will clean up WAL
+        const corruption_count = store.recover_from_wal() catch |err| {
+            allocator.free(entries);
+            return err;
+        };
 
-        return store;
+        return InitResult{
+            .store = store,
+            .corruption_count = corruption_count,
+        };
     }
 
     pub fn deinit(self: *KVStore) void {
@@ -73,7 +90,19 @@ pub const KVStore = struct {
         const intent_offset = try self.wal.append_entry(.set, key, value);
 
         const hash = hash_key(key);
-        const index = self.find_slot(hash, key);
+        
+        // Ensure there is enough capacity before finding a slot
+        var index: usize = undefined;
+        while (true) {
+            const result = self.find_slot(hash, key);
+            if (result) |slot| {
+                index = slot;
+                break;
+            } else |err| switch (err) {
+                error.HashTableFull => try self.resize(),
+                else => return err,
+            }
+        }
 
         if (self.entries[index]) |*existing| {
             // Update existing entry
@@ -98,7 +127,10 @@ pub const KVStore = struct {
 
     pub fn get(self: *KVStore, key: []const u8) ?[]const u8 {
         const hash = hash_key(key);
-        const index = self.find_slot(hash, key);
+        const index = self.find_slot(hash, key) catch {
+            // If hash table is full and can't find the key, it doesn't exist
+            return null;
+        };
 
         if (self.entries[index]) |*entry| {
             if (!entry.is_deleted and std.mem.eql(u8, entry.key, key)) {
@@ -113,7 +145,12 @@ pub const KVStore = struct {
         const intent_offset = try self.wal.append_entry(.del, key, "");
 
         const hash = hash_key(key);
-        const index = self.find_slot(hash, key);
+        const index = self.find_slot(hash, key) catch {
+            // If hash table is full and can't find the key, it doesn't exist
+            const checksum = wal_mod.WAL.calculate_checksum(key, "");
+            try self.wal.append_completion(intent_offset, .success, checksum);
+            return false;
+        };
 
         var deleted = false;
         if (self.entries[index]) |*entry| {
@@ -135,9 +172,11 @@ pub const KVStore = struct {
         try self.wal.flush();
     }
 
-    fn find_slot(self: *KVStore, hash: u64, key: []const u8) usize {
+    fn find_slot(self: *KVStore, hash: u64, key: []const u8) !usize {
         var index = hash % self.capacity;
-        while (true) {
+        var attempts: usize = 0;
+        
+        while (attempts < self.capacity) {
             if (self.entries[index]) |*entry| {
                 if (!entry.is_deleted and std.mem.eql(u8, entry.key, key)) {
                     return index;
@@ -146,7 +185,11 @@ pub const KVStore = struct {
                 return index;
             }
             index = (index + 1) % self.capacity;
+            attempts += 1;
         }
+        
+        // Hash table is full - this should trigger a resize
+        return error.HashTableFull;
     }
 
     fn resize(self: *KVStore) !void {
@@ -163,7 +206,11 @@ pub const KVStore = struct {
         for (old_entries) |entry| {
             if (entry) |kv| {
                 if (!kv.is_deleted) {
-                    const index = self.find_slot(kv.hash, kv.key);
+                    const index = self.find_slot(kv.hash, kv.key) catch {
+                        // This should never happen after resize, but just in case
+                        std.log.err("KVStore: find_slot failed during resize for key: {s} (hash: {x}), possible data loss", .{kv.key, kv.hash});
+                        continue;
+                    };
                     self.entries[index] = kv;
                     self.size += 1;
                 }
@@ -173,7 +220,7 @@ pub const KVStore = struct {
         self.allocator.free(old_entries);
     }
 
-    fn recover_from_wal(self: *KVStore) !void {
+    fn recover_from_wal(self: *KVStore) !u64 {
         const RecoveryState = struct {
             var store_ptr: ?*KVStore = null;
 
@@ -191,13 +238,18 @@ pub const KVStore = struct {
         };
 
         RecoveryState.store_ptr = self;
-        try self.wal.recovery_read(RecoveryState.callback);
+        const corruption_count = try self.wal.recovery_read(RecoveryState.callback);
         RecoveryState.store_ptr = null;
+        
+        return corruption_count;
     }
 
     fn set_without_wal(self: *KVStore, key: []const u8, value: []const u8) !void {
         const hash = hash_key(key);
-        const index = self.find_slot(hash, key);
+        const index = self.find_slot(hash, key) catch {
+            // During recovery, if hash table is full, just ignore this entry
+            return;
+        };
 
         if (self.entries[index]) |*existing| {
             self.allocator.free(existing.value);
@@ -215,7 +267,10 @@ pub const KVStore = struct {
 
     fn del_without_wal(self: *KVStore, key: []const u8) !bool {
         const hash = hash_key(key);
-        const index = self.find_slot(hash, key);
+        const index = self.find_slot(hash, key) catch {
+            // During recovery, if hash table is full, just ignore this deletion
+            return false;
+        };
 
         if (self.entries[index]) |*entry| {
             if (!entry.is_deleted and std.mem.eql(u8, entry.key, key)) {

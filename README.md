@@ -13,7 +13,8 @@ Built to demonstrate Zig's usefulness for databases, providing for simplicity, s
 - **Fast operations** - HashMap-based storage with O(1) average access time
 - **Memory efficient** - Minimal memory footprint with smart allocation
 - **Crash recovery** - Automatic WAL replay on startup
-- **Simple architecture** - Clean, readable codebase under 200 lines
+- **Simple architecture** - Clean, readable codebase
+- **Simulation framework** - Comprehensive testing infrastructure for failure scenarios
 
 ## Quick Start
 
@@ -42,6 +43,42 @@ OK
 > QUIT
 ```
 
+## Simulation Framework
+
+Poro includes a comprehensive simulation framework for testing database behavior under various failure conditions:
+
+```bash
+# Run all simulation scenarios
+zig build sim
+
+# Run a specific scenario
+./zig-out/bin/sim_runner --scenario filesystem
+
+# Run with deterministic seed
+./zig-out/bin/sim_runner --seed 12345 --scenario corruption
+```
+
+### Available Scenarios
+
+| Scenario | Description |
+|----------|-------------|
+| `perfect` | Basic operations under perfect conditions |
+| `corruption` | WAL corruption and recovery testing |
+| `completion_corruption` | Completion WAL corruption testing |
+| `massive` | Large data load testing |
+| `random` | Cosmic ray-like random corruption |
+| `truncation` | WAL file truncation testing |
+| `comprehensive` | Complete system state verification |
+| `filesystem` | True filesystem error simulation |
+
+### Simulation Features
+
+- **Deterministic testing** - Reproducible results with seed control
+- **Filesystem error injection** - Disk full, permission errors, I/O failures
+- **WAL corruption simulation** - Bit flips, truncation, random corruption
+- **Recovery verification** - Automatic crash recovery testing
+- **System introspection** - Database state verification and integrity checks
+
 ## Commands
 
 | Command | Description | Example |
@@ -55,20 +92,32 @@ OK
 
 Poro consists of three core components:
 
-### 1. Simple Store (`simple_store.zig`)
-- HashMap-based key-value storage
+### 1. KVStore (`kvstore.zig`)
+- HashMap-based key-value storage with linear probing
 - Automatic memory management
-- Integration with WAL for persistence
+- Integration with dual WAL for persistence
 
-### 2. Write-Ahead Log (`simple_wal.zig`)
-- Ensures data durability
-- Supports crash recovery
-- Sequential file-based storage
+### 2. Write-Ahead Log (`wal.zig`)
+- Dual WAL design: intent log + completion log
+- Ensures ACID transaction properties
+- io_uring-based asynchronous I/O
+- Automatic crash recovery
 
-### 3. CLI Interface (`main.zig`)
+### 3. Static Allocator (`allocator.zig`)
+- State machine-controlled memory allocation
+- Prevents allocation during frozen state
+- Supports controlled deallocation phases
+
+### 4. CLI Interface (`main.zig`)
 - Simple command parsing
 - Interactive prompt
 - Error handling and user feedback
+
+### 5. Simulation Framework (`simulation.zig`)
+- Comprehensive failure scenario testing
+- Filesystem abstraction and error injection
+- Deterministic corruption testing
+- Automatic recovery verification
 
 ## Performance
 
@@ -117,6 +166,9 @@ zig build test
 
 # Run the application
 zig build run
+
+# Run simulation framework
+zig build sim
 ```
 
 ## Testing
@@ -125,8 +177,14 @@ zig build run
 # Run all tests
 zig build test
 
+# Run simulation tests
+zig build sim
+
 # Manual testing
 echo -e "SET test hello\\nGET test\\nDEL test\\nQUIT" | ./zig-out/bin/poro
+
+# Test specific simulation scenario
+./zig-out/bin/sim_runner --scenario filesystem
 ```
 
 ## File Structure
@@ -134,16 +192,20 @@ echo -e "SET test hello\\nGET test\\nDEL test\\nQUIT" | ./zig-out/bin/poro
 ```
 src/
 ├── main.zig           # CLI interface and main entry point
-├── simple_store.zig   # Key-value store implementation
-├── simple_wal.zig     # Write-Ahead Log implementation
-└── root.zig          # Library exports
+├── lib.zig            # Library exports and Database wrapper
+├── kvstore.zig        # Key-value store implementation
+├── wal.zig            # Write-Ahead Log implementation
+├── allocator.zig      # Static allocator implementation
+├── simulation.zig     # Simulation framework
+├── filesystem.zig     # Filesystem abstraction layer
+└── sim_runner.zig     # Simulation runner CLI
 ```
 
 ## Configuration
 
 Poro uses sensible defaults with no configuration required:
 
-- **WAL file**: `poro.wal` (created automatically)
+- **WAL files**: `intent.wal` and `completion.wal` (created automatically)
 - **Buffer size**: 1KB for command input
 - **HashMap**: Default Zig HashMap with string keys
 
