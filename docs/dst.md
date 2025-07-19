@@ -94,39 +94,6 @@ The framework includes several specialized test configurations:
 - High allocation failure rate (8%)
 - Tests graceful degradation under memory pressure
 
-## Current Implementation Status
-
-### Completed Features ✅
-
-**Core Framework** (`src/property_testing.zig`):
-- Property test definition and execution engine
-- Operation sequence generation with probability distributions
-- Basic failure injection (allocator, filesystem)
-- Simple shrinking algorithm (remove operations)
-- Comprehensive statistics collection and reporting
-
-**Failure Injection** (`src/filesystem.zig`):
-- Simulated filesystem with configurable error conditions
-- Dependency injection for testable database operations
-- Pattern-based error targeting (*.wal files)
-
-**Statistical Analysis**:
-- Operation counts and failure rates
-- WAL corruption detection and counting
-- Execution time tracking
-- Failure type breakdown with percentages
-
-**Test Infrastructure**:
-- 7 built-in test configurations covering different stress scenarios
-- Command-line runner with seed control for reproducibility
-- Integration with build system (`zig build prop` or `zig build sim`)
-
-**Critical Bug Fixes**:
-- Fixed infinite loop in hash table `find_slot()` function
-- Resolved WAL corruption spam by converting to statistics
-- Eliminated double-free bugs during restart operations
-- Proper error propagation throughout the system
-
 ### Usage Examples
 
 **Run all property tests:**
@@ -665,7 +632,7 @@ Property tests must provide statistical validation:
 
 ### Success Metrics (Current Achievement)
 
-The DST v2 implementation has successfully achieved its core objectives:
+The DST implementation has successfully achieved its core objectives:
 
 1. ✅ **Discovered Critical Bugs**: Found 4 critical issues including infinite loops, memory corruption, and resource management bugs
 2. ✅ **Reproducible Failure Cases**: Seed-controlled determinism enables exact reproduction of any failing scenario
@@ -698,7 +665,7 @@ zig build test                    # Unit tests + property tests
 
 ## Conclusion
 
-DST v2 represents a significant advancement in database testing methodology. By combining property-based testing with comprehensive failure injection, it provides:
+DST represents a significant advancement in database testing methodology. By combining property-based testing with comprehensive failure injection, it provides:
 
 - **Systematic Bug Discovery**: Finds issues that manual testing would miss
 - **Statistical Confidence**: Validates system behavior under quantified failure rates
