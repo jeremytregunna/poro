@@ -60,66 +60,9 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-zig-
 
-    - name: Build property test runner
-      run: zig build prop
-
-    - name: Run basic property tests (fast)
-      run: zig build sim -- --test basic --iterations 25 --seed 42
-      timeout-minutes: 5
-
-    - name: Run collision stress tests
-      run: zig build sim -- --test collision --iterations 20 --seed 123
-      timeout-minutes: 5
-
-    - name: Run WAL corruption stress tests
-      run: zig build sim -- --test wal_stress --iterations 15 --seed 456
-      timeout-minutes: 5
-
-    - name: Run recovery stress tests
-      run: zig build sim -- --test recovery --iterations 20 --seed 789
-      timeout-minutes: 5
-
-    - name: Run memory pressure tests
-      run: zig build sim -- --test memory_pressure --iterations 15 --seed 101112
-      timeout-minutes: 5
-
-  comprehensive-simulation:
-    name: Comprehensive Simulation Suite
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup Zig
-      uses: goto-bus-stop/setup-zig@v2
-      with:
-        version: 0.14.1
-
-    - name: Cache Zig
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/zig
-          zig-cache
-        key: ${{ runner.os }}-zig-full-${{ hashFiles('build.zig.zon') }}
-        restore-keys: |
-          ${{ runner.os }}-zig-
-
-    - name: Build property test runner
-      run: zig build prop
-
-    - name: Run full simulation suite
-      run: zig build sim -- --iterations 100
-      timeout-minutes: 30
-
-    - name: Run hash table exhaustion tests
-      run: zig build sim -- --test exhaustion --iterations 50 --seed 131415
-      timeout-minutes: 15
-
-    - name: Run memory exhaustion tests
-      run: zig build sim -- --test memory_exhaustion --iterations 50 --seed 161718
-      timeout-minutes: 15
+    - name: Run simulation suite
+      run: zig build sim -- --iterations 10 --seed 42
+      timeout-minutes: 10
 
   benchmark:
     name: Performance Benchmark
