@@ -1,18 +1,14 @@
 const std = @import("std");
-const allocator_mod = @import("allocator.zig");
-const kvstore_mod = @import("kvstore.zig");
+const poro = @import("lib.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer _ = arena.deinit();
 
-    var static_alloc = allocator_mod.StaticAllocator.init(arena.allocator());
-    defer static_alloc.deinit();
-
     const wal_intent_file = "poro_intent.wal";
     const wal_completion_file = "poro_completion.wal";
-    var store = try kvstore_mod.KVStore.init(static_alloc.allocator(), wal_intent_file, wal_completion_file);
-    defer store.deinit();
+    var db = try poro.Database.init(arena.allocator(), wal_intent_file, wal_completion_file);
+    defer db.deinit();
 
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
@@ -36,7 +32,7 @@ pub fn main() !void {
         };
 
         if (std.ascii.eqlIgnoreCase(command, "QUIT")) {
-            try store.flush_wal();
+            try db.flush();
             try stdout.print("Goodbye!\n", .{});
             break;
         } else if (std.ascii.eqlIgnoreCase(command, "SET")) {
@@ -50,7 +46,7 @@ pub fn main() !void {
                 continue;
             }
 
-            store.set(key, value) catch |err| {
+            db.set(key, value) catch |err| {
                 try stdout.print("ERR: Failed to set key: {}\n> ", .{err});
                 continue;
             };
@@ -61,7 +57,7 @@ pub fn main() !void {
                 continue;
             };
 
-            if (store.get(key)) |value| {
+            if (db.get(key)) |value| {
                 try stdout.print("\"{s}\"\n> ", .{value});
             } else {
                 try stdout.print("(nil)\n> ", .{});
@@ -72,7 +68,7 @@ pub fn main() !void {
                 continue;
             };
 
-            const deleted = store.del(key) catch |err| {
+            const deleted = db.del(key) catch |err| {
                 try stdout.print("ERR: Failed to delete key: {}\n> ", .{err});
                 continue;
             };

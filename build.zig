@@ -92,4 +92,36 @@ pub fn build(b: *std.Build) void {
 
     const benchmark_step = b.step("benchmark", "Run performance benchmark");
     benchmark_step.dependOn(&run_benchmark.step);
+
+    // Add simulation runner executable
+    const sim_runner_mod = b.createModule(.{
+        .root_source_file = b.path("src/sim_runner.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const sim_runner = b.addExecutable(.{
+        .name = "sim_runner",
+        .root_module = sim_runner_mod,
+    });
+
+    b.installArtifact(sim_runner);
+
+    const run_sim_runner = b.addRunArtifact(sim_runner);
+    run_sim_runner.step.dependOn(b.getInstallStep());
+
+    const sim_step = b.step("sim", "Run database simulation tests");
+    sim_step.dependOn(&run_sim_runner.step);
+
+    // Add library target for external use
+    const lib = b.addStaticLibrary(.{
+        .name = "poro",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/lib.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    b.installArtifact(lib);
 }

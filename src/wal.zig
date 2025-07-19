@@ -270,6 +270,10 @@ pub const WAL = struct {
             // Build completion map
             var completion_offset: usize = 0;
             while (completion_offset + @sizeOf(CompletionEntry) <= completion_buffer.len) {
+                if (completion_offset % @alignOf(CompletionEntry) != 0) {
+                    completion_offset += 1;
+                    continue;
+                }
                 const completion_ptr: *const CompletionEntry = @ptrCast(@alignCast(&completion_buffer[completion_offset]));
                 try completion_map.put(completion_ptr.intent_offset, completion_ptr.*);
                 completion_offset += @sizeOf(CompletionEntry);
@@ -281,6 +285,10 @@ pub const WAL = struct {
         while (intent_offset < intent_buffer.len) {
             if (intent_offset + @sizeOf(WALEntry) > intent_buffer.len) break;
 
+            if (intent_offset % @alignOf(WALEntry) != 0) {
+                intent_offset += 1;
+                continue;
+            }
             const entry_ptr: *const WALEntry = @ptrCast(@alignCast(&intent_buffer[intent_offset]));
             const entry_start_offset = intent_offset;
             intent_offset += @sizeOf(WALEntry);

@@ -38,13 +38,13 @@ pub const StaticAllocator = struct {
     }
 
     pub fn to_frozen(self: *StaticAllocator) void {
-        assert(self.state == .assert);
+        assert(self.state == .allocate);
         self.state = .frozen;
     }
 
     pub fn to_deallocate(self: *StaticAllocator) void {
         assert(self.state == .frozen);
-        self.state = .deinit;
+        self.state = .deallocate;
     }
 
     pub fn get_state(self: *StaticAllocator) AllocatorState {
@@ -53,19 +53,19 @@ pub const StaticAllocator = struct {
 
     fn alloc(ctx: *anyopaque, len: usize, log2_ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         const self: *StaticAllocator = @ptrCast(@alignCast(ctx));
-        assert(self.state == .allocate);
+        if (self.state != .allocate) return null;
         return self.parent_allocator.rawAlloc(len, log2_ptr_align, ret_addr);
     }
 
     fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
         const self: *StaticAllocator = @ptrCast(@alignCast(ctx));
-        assert(self.state == .allocate);
+        if (self.state != .allocate) return false;
         return self.parent_allocator.rawResize(buf, log2_buf_align, new_len, ret_addr);
     }
 
     fn remap(ctx: *anyopaque, buf: []u8, log2_buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
         const self: *StaticAllocator = @ptrCast(@alignCast(ctx));
-        assert(self.state == .allocate);
+        if (self.state != .allocate) return null;
         return self.parent_allocator.rawRemap(buf, log2_buf_align, new_len, ret_addr);
     }
 
@@ -90,12 +90,11 @@ test "static allocator state machine" {
     // Test frozen state
     static_alloc.to_frozen();
     try std.testing.expect(static_alloc.get_state() == .frozen);
-    const frozen_memory = alloc.alloc(u8, 100);
+    const frozen_memory = alloc.alloc(u8, 100) catch null;
     try std.testing.expect(frozen_memory == null);
 
     // Test deallocate state
     static_alloc.to_deallocate();
     try std.testing.expect(static_alloc.get_state() == .deallocate);
     alloc.free(memory);
-    static_alloc.free_all();
 }
