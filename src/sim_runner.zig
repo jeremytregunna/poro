@@ -17,16 +17,28 @@ pub fn main() !void {
     const temp_dir = "/tmp/poro_sim";
     std.fs.makeDirAbsolute(temp_dir) catch {};
 
-    var simulator = simulation.Simulator.init(allocator, temp_dir);
+    // Parse seed if provided
+    var seed: u64 = 12345; // default seed
+    var arg_offset: usize = 1;
+    
+    if (args.len > 2 and std.mem.eql(u8, args[1], "--seed")) {
+        seed = std.fmt.parseInt(u64, args[2], 10) catch {
+            try stdout.print("Error: Invalid seed value '{s}'\n", .{args[2]});
+            return;
+        };
+        arg_offset = 3;
+    }
 
-    if (args.len > 1 and std.mem.eql(u8, args[1], "--scenario")) {
-        if (args.len < 3) {
-            try stdout.print("Usage: sim_runner --scenario <scenario_name>\n", .{});
+    var simulator = simulation.Simulator.initWithSeed(allocator, temp_dir, seed);
+
+    if (args.len > arg_offset and std.mem.eql(u8, args[arg_offset], "--scenario")) {
+        if (args.len < arg_offset + 1) {
+            try stdout.print("Usage: sim_runner [--seed <number>] --scenario <scenario_name>\n", .{});
             try stdout.print("Available scenarios: perfect, corruption, completion_corruption, massive, random, truncation\n", .{});
             return;
         }
 
-        const scenario_name = args[2];
+        const scenario_name = args[arg_offset + 1];
         const scenario = if (std.mem.eql(u8, scenario_name, "perfect"))
             simulation.perfect_conditions_scenario
         else if (std.mem.eql(u8, scenario_name, "corruption"))
@@ -45,7 +57,7 @@ pub fn main() !void {
             return;
         };
 
-        try stdout.print("Running scenario: {s}\n", .{scenario.name});
+        try stdout.print("Running scenario: {s} (seed: {})\n", .{ scenario.name, seed });
         try stdout.print("Description: {s}\n\n", .{scenario.description});
 
         const result = try simulator.run_scenario(scenario);
@@ -56,7 +68,7 @@ pub fn main() !void {
         }
     } else {
         // Run all predefined scenarios
-        try stdout.print("Poro Database Simulation Runner\n", .{});
+        try stdout.print("Poro Database Simulation Runner (seed: {})\n", .{seed});
         try stdout.print("===============================\n\n", .{});
 
         const scenarios = [_]simulation.SimulationScenario{

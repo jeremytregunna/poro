@@ -65,12 +65,18 @@ pub const Simulator = struct {
     allocator: std.mem.Allocator,
     temp_dir: []const u8,
     prng: std.Random.DefaultPrng,
+    seed: u64,
 
     pub fn init(allocator: std.mem.Allocator, temp_dir: []const u8) Simulator {
+        return Simulator.initWithSeed(allocator, temp_dir, 12345);
+    }
+
+    pub fn initWithSeed(allocator: std.mem.Allocator, temp_dir: []const u8, seed: u64) Simulator {
         return Simulator{
             .allocator = allocator,
             .temp_dir = temp_dir,
-            .prng = std.Random.DefaultPrng.init(12345),
+            .prng = std.Random.DefaultPrng.init(seed),
+            .seed = seed,
         };
     }
 
@@ -196,8 +202,10 @@ pub const Simulator = struct {
                 try file.setEndPos(offset);
             },
             .random_corruption => {
+                // Use scenario-specific seed if provided, otherwise use simulator seed
+                var local_prng = std.Random.DefaultPrng.init(if (config.seed != 12345) config.seed else self.seed);
                 var corrupt_data: [16]u8 = undefined;
-                self.prng.random().bytes(&corrupt_data);
+                local_prng.random().bytes(&corrupt_data);
                 const write_size = @min(corrupt_data.len, file_size - offset);
                 try file.writeAll(corrupt_data[0..write_size]);
             },
@@ -273,9 +281,9 @@ pub const completion_wal_corruption_scenario = SimulationScenario{
         .{ .set = .{ .key = "key2", .value = "value2" } },
         .flush,
         .{ .inject_corruption = .{
-            .corruption_type = .byte_zero,
+            .corruption_type = .random_corruption,
             .target_file = .completion_wal,
-            .offset = 5,
+            .offset = 0, // Corrupt the intent_offset field of first completion entry
         } },
         .restart_db,
         .{ .get = .{ .key = "key1", .expected = null } }, // Should be lost due to incomplete transaction
@@ -283,9 +291,9 @@ pub const completion_wal_corruption_scenario = SimulationScenario{
         .{ .get = .{ .key = "key3", .expected = "value3" } },
     },
     .corruption_config = .{
-        .corruption_type = .byte_zero,
+        .corruption_type = .random_corruption,
         .target_file = .completion_wal,
-        .offset = 5,
+        .offset = 0,
     },
 };
 
