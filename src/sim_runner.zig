@@ -38,7 +38,7 @@ pub fn main() !void {
     if (args.len > arg_offset and std.mem.eql(u8, args[arg_offset], "--scenario")) {
         if (args.len < arg_offset + 1) {
             try stdout.print("Usage: sim_runner [--seed <number>] --scenario <scenario_name>\n", .{});
-            try stdout.print("Available scenarios: perfect, corruption, completion_corruption, massive, random, truncation\n", .{});
+            try stdout.print("Available scenarios: perfect, corruption, completion_corruption, massive, random, truncation, comprehensive, filesystem\n", .{});
             return;
         }
 
@@ -55,9 +55,13 @@ pub fn main() !void {
             simulation.random_corruption_scenario
         else if (std.mem.eql(u8, scenario_name, "truncation"))
             simulation.truncation_scenario
+        else if (std.mem.eql(u8, scenario_name, "comprehensive"))
+            simulation.comprehensive_system_scenario
+        else if (std.mem.eql(u8, scenario_name, "filesystem"))
+            simulation.filesystem_error_simulation_scenario
         else {
             try stdout.print("Unknown scenario: {s}\n", .{scenario_name});
-            try stdout.print("Available scenarios: perfect, corruption, completion_corruption, massive, random, truncation\n", .{});
+            try stdout.print("Available scenarios: perfect, corruption, completion_corruption, massive, random, truncation, comprehensive, filesystem\n", .{});
             return;
         };
 
@@ -82,6 +86,8 @@ pub fn main() !void {
             simulation.massive_data_scenario,
             simulation.random_corruption_scenario,
             simulation.truncation_scenario,
+            simulation.comprehensive_system_scenario,
+            simulation.filesystem_error_simulation_scenario,
         };
 
         const results = try simulator.run_scenarios(&scenarios);

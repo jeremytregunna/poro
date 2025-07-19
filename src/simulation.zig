@@ -2,6 +2,7 @@
 // ABOUTME: Supports perfect conditions, WAL corruption, and custom failure injection
 const std = @import("std");
 const poro = @import("lib.zig");
+const filesystem = @import("filesystem.zig");
 
 pub const SimulationError = error{
     ScenarioFailed,
@@ -22,6 +23,7 @@ pub const SimulationScenario = struct {
     description: []const u8,
     operations: []const Operation,
     corruption_config: ?CorruptionConfig = null,
+    filesystem_config: ?FilesystemConfig = null,
 
     pub const Operation = union(enum) {
         set: struct { key: []const u8, value: []const u8 },
@@ -30,6 +32,20 @@ pub const SimulationScenario = struct {
         flush,
         inject_corruption: CorruptionConfig,
         restart_db,
+        // New operations for comprehensive system testing
+        inspect_stats: struct { 
+            expected_size: ?usize = null,
+            expected_capacity: ?usize = null,
+        },
+        verify_integrity,
+        simulate_filesystem_error: FilesystemError,
+    };
+
+    pub const FilesystemError = struct {
+        error_type: filesystem.FilesystemError,
+        target_pattern: []const u8, // Pattern like "*.wal" or exact path
+        operation: filesystem.FileOperationType,
+        clear_after: bool = false, // Clear condition after first trigger
     };
 
     pub const CorruptionConfig = struct {
@@ -38,6 +54,11 @@ pub const SimulationScenario = struct {
         offset: ?usize = null,
         probability: f32 = 1.0,
         seed: u64 = 12345,
+    };
+
+    pub const FilesystemConfig = struct {
+        use_simulated_fs: bool = false,
+        initial_error_conditions: []const FilesystemError = &[_]FilesystemError{},
     };
 };
 
@@ -66,6 +87,8 @@ pub const Simulator = struct {
     temp_dir: []const u8,
     prng: std.Random.DefaultPrng,
     seed: u64,
+    filesystem: ?*filesystem.SimulatedFilesystem = null, // Optional for filesystem error simulation
+    real_filesystem: ?*filesystem.RealFilesystem = null,
 
     pub fn init(allocator: std.mem.Allocator, temp_dir: []const u8) Simulator {
         // Generate random seed for non-deterministic behavior by default
@@ -99,6 +122,33 @@ pub const Simulator = struct {
         // Clean up any existing test files
         std.fs.deleteFileAbsolute(intent_wal_path) catch {};
         std.fs.deleteFileAbsolute(completion_wal_path) catch {};
+
+        // Set up filesystem abstraction
+        var simulated_fs: ?filesystem.SimulatedFilesystem = null;
+        var real_fs: ?filesystem.RealFilesystem = null;
+        defer {
+            if (simulated_fs) |*fs| fs.deinit();
+            if (real_fs) |*fs| fs.deinit();
+        }
+
+        if (scenario.filesystem_config) |fs_config| {
+            if (fs_config.use_simulated_fs) {
+                simulated_fs = filesystem.SimulatedFilesystem.init(self.allocator);
+                self.filesystem = &simulated_fs.?;
+                
+                // Set up initial error conditions
+                for (fs_config.initial_error_conditions) |error_condition| {
+                    try simulated_fs.?.set_error_condition(
+                        error_condition.operation,
+                        error_condition.target_pattern,
+                        error_condition.error_type
+                    );
+                }
+            } else {
+                real_fs = filesystem.RealFilesystem.init(self.allocator);
+                self.real_filesystem = &real_fs.?;
+            }
+        }
 
         var db: ?poro.Database = null;
         defer if (db) |*d| d.deinit();
@@ -166,6 +216,34 @@ pub const Simulator = struct {
                 // Reinitialize database to test recovery
                 db.deinit();
                 db.* = poro.Database.init(self.allocator, intent_wal_path, completion_wal_path) catch return false;
+                return true;
+            },
+            .inspect_stats => |stats_check| {
+                const stats = db.get_stats();
+                if (stats_check.expected_size) |expected| {
+                    if (stats.size != expected) return false;
+                }
+                if (stats_check.expected_capacity) |expected| {
+                    if (stats.capacity != expected) return false;
+                }
+                return true;
+            },
+            .verify_integrity => {
+                return db.verify_integrity();
+            },
+            .simulate_filesystem_error => |fs_error| {
+                if (self.filesystem) |sim_fs| {
+                    try sim_fs.set_error_condition(
+                        fs_error.operation,
+                        fs_error.target_pattern,
+                        fs_error.error_type
+                    );
+                    std.debug.print("SIMULATION: Set filesystem error condition {} on pattern '{s}' during {}\n", .{ 
+                        fs_error.error_type, fs_error.target_pattern, fs_error.operation 
+                    });
+                } else {
+                    std.debug.print("SIMULATION: Filesystem error simulation requested but no simulated filesystem active\n", .{});
+                }
                 return true;
             },
         }
@@ -365,6 +443,81 @@ pub const truncation_scenario = SimulationScenario{
         .corruption_type = .truncation,
         .target_file = .intent_wal,
         .offset = 50,
+    },
+};
+
+pub const comprehensive_system_scenario = SimulationScenario{
+    .name = "Comprehensive System Testing",
+    .description = "Test all aspects of system state and integrity",
+    .operations = &[_]SimulationScenario.Operation{
+        // Initial state verification
+        .{ .inspect_stats = .{ .expected_size = 0, .expected_capacity = 1024 } },
+        .verify_integrity,
+        
+        // Add some data and verify
+        .{ .set = .{ .key = "key1", .value = "value1" } },
+        .{ .set = .{ .key = "key2", .value = "value2" } },
+        .{ .inspect_stats = .{ .expected_size = 2 } },
+        .verify_integrity,
+        
+        // Delete and verify size changes
+        .{ .del = .{ .key = "key1", .should_exist = true } },
+        .{ .inspect_stats = .{ .expected_size = 1 } },
+        .verify_integrity,
+        
+        // Test recovery with verification
+        .flush,
+        .restart_db,
+        .{ .inspect_stats = .{ .expected_size = 1 } },
+        .verify_integrity,
+        .{ .get = .{ .key = "key2", .expected = "value2" } },
+        .{ .get = .{ .key = "key1", .expected = null } },
+        
+        // Simulate filesystem error (demonstration)
+        .{ .simulate_filesystem_error = .{
+            .error_type = filesystem.FilesystemError.DiskFull,
+            .target_pattern = "*.wal",
+            .operation = .write,
+        } },
+    },
+};
+
+pub const filesystem_error_simulation_scenario = SimulationScenario{
+    .name = "Filesystem Error Simulation",
+    .description = "Test true filesystem error injection including disk full and permission errors",
+    .operations = &[_]SimulationScenario.Operation{
+        // Set up some initial data
+        .{ .set = .{ .key = "key1", .value = "value1" } },
+        .{ .set = .{ .key = "key2", .value = "value2" } },
+        .flush,
+        
+        // Simulate disk full error on WAL writes
+        .{ .simulate_filesystem_error = .{
+            .error_type = filesystem.FilesystemError.DiskFull,
+            .target_pattern = "*.wal",
+            .operation = .write,
+        } },
+        
+        // This write should fail due to simulated disk full
+        .{ .set = .{ .key = "key3", .value = "value3" } },
+        
+        // Simulate permission denied error
+        .{ .simulate_filesystem_error = .{
+            .error_type = filesystem.FilesystemError.PermissionDenied,
+            .target_pattern = "*.wal",
+            .operation = .flush,
+        } },
+        
+        // This flush should fail due to simulated permission error
+        .flush,
+        
+        // Verify we can still read existing data
+        .{ .get = .{ .key = "key1", .expected = "value1" } },
+        .{ .get = .{ .key = "key2", .expected = "value2" } },
+    },
+    .filesystem_config = .{
+        .use_simulated_fs = true,
+        .initial_error_conditions = &[_]SimulationScenario.FilesystemError{},
     },
 };
 

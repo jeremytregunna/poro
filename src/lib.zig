@@ -38,6 +38,42 @@ pub const Database = struct {
     pub fn flush(self: *Database) !void {
         return self.store.flush_wal();
     }
+
+    // Introspection methods for simulation testing
+    pub fn get_stats(self: *Database) DatabaseStats {
+        return DatabaseStats{
+            .size = self.store.size,
+            .capacity = self.store.capacity,
+            .entries_count = self.count_entries(),
+        };
+    }
+
+    pub fn verify_integrity(self: *Database) bool {
+        // Verify internal consistency
+        var actual_size: usize = 0;
+        for (self.store.entries) |entry| {
+            if (entry) |kv| {
+                if (!kv.is_deleted) {
+                    actual_size += 1;
+                }
+            }
+        }
+        return actual_size == self.store.size;
+    }
+
+    fn count_entries(self: *Database) usize {
+        var count: usize = 0;
+        for (self.store.entries) |entry| {
+            if (entry != null) count += 1;
+        }
+        return count;
+    }
+};
+
+pub const DatabaseStats = struct {
+    size: usize,       // Number of active (non-deleted) entries
+    capacity: usize,   // Hash table capacity
+    entries_count: usize, // Total entries (including deleted)
 };
 
 test "Database basic operations" {
