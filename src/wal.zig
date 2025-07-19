@@ -397,7 +397,8 @@ test "WAL basic operations" {
 
     TestState.recovered_entries = 0;
     TestState.completed_entries = 0;
-    try wal.recovery_read(TestState.callback);
+    const corruption_count = try wal.recovery_read(TestState.callback);
+    try std.testing.expect(corruption_count == 0); // Should be no corruption in this test
     try std.testing.expect(TestState.recovered_entries == 3);
     try std.testing.expect(TestState.completed_entries == 2); // Only first two operations were completed
     try std.testing.expect(TestState.last_operation == .del);

@@ -164,10 +164,11 @@ pub const RealFilesystem = struct {
 
         try self.open_files.put(handle_id, file);
 
+        const duplicated_path = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(duplicated_path);
+        
         return FileHandle{
             .id = handle_id,
-            const duplicated_path = try self.allocator.dupe(u8, path);
-            defer if (handle_id == undefined) self.allocator.free(duplicated_path);
             .path = duplicated_path,
         };
     }
