@@ -110,7 +110,7 @@ pub const WAL = struct {
 
         // Check if we have space in the intent ring buffer
         if (self.intent_write_offset + total_size > WAL_SIZE) {
-            if (self.intent_read_offset > total_size) {
+            if (self.intent_read_offset >= total_size) {
                 // Wrap around - there's enough space at the beginning
                 self.intent_write_offset = 0;
             } else {

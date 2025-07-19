@@ -91,15 +91,18 @@ pub const KVStore = struct {
 
         const hash = hash_key(key);
         
-        // Try to find a slot, with one resize attempt if needed
-        const index = self.find_slot(hash, key) catch |err| switch (err) {
-            error.HashTableFull => blk: {
-                // Try to resize once, if it fails we can't proceed
-                try self.resize();
-                // Try find_slot again after resize
-                break :blk try self.find_slot(hash, key);
-            },
-        };
+        // Ensure there is enough capacity before finding a slot
+        var index: usize = undefined;
+        while (true) {
+            const result = self.find_slot(hash, key);
+            if (result) |slot| {
+                index = slot;
+                break;
+            } else |err| switch (err) {
+                error.HashTableFull => try self.resize(),
+                else => return err,
+            }
+        }
 
         if (self.entries[index]) |*existing| {
             // Update existing entry
@@ -205,6 +208,7 @@ pub const KVStore = struct {
                 if (!kv.is_deleted) {
                     const index = self.find_slot(kv.hash, kv.key) catch {
                         // This should never happen after resize, but just in case
+                        std.log.err("KVStore: find_slot failed during resize for key: {s} (hash: {x}), possible data loss", .{kv.key, kv.hash});
                         continue;
                     };
                     self.entries[index] = kv;
