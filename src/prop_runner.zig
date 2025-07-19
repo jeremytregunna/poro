@@ -175,36 +175,40 @@ fn get_test_by_name(name: []const u8, seed: u64) ?property_testing.PropertyTest 
 }
 
 fn get_all_tests(seed: u64) []const property_testing.PropertyTest {
-    const tests = [_]property_testing.PropertyTest{
-        blk: {
-            var test_config = property_testing.basic_property_test;
-            test_config.seed = seed;
-            break :blk test_config;
-        },
-        blk: {
-            var test_config = property_testing.collision_stress_test;
-            test_config.seed = seed + 1; // Different seed for variety
-            break :blk test_config;
-        },
-        blk: {
-            var test_config = property_testing.hash_exhaustion_test;
-            test_config.seed = seed + 2; // Different seed for variety
-            break :blk test_config;
-        },
-        blk: {
-            var test_config = property_testing.wal_stress_test;
-            test_config.seed = seed + 3; // Different seed for variety
-            break :blk test_config;
-        },
-        blk: {
-            var test_config = property_testing.memory_exhaustion_test;
-            test_config.seed = seed + 4; // Different seed for variety
-            break :blk test_config;
-        },
-        create_recovery_stress_test(seed + 5),
-        create_memory_pressure_test(seed + 6),
+    // Use a static variable to avoid returning a dangling pointer
+    const static = struct {
+        var tests: [7]property_testing.PropertyTest = undefined;
     };
-    return &tests;
+    
+    static.tests[0] = blk: {
+        var test_config = property_testing.basic_property_test;
+        test_config.seed = seed;
+        break :blk test_config;
+    };
+    static.tests[1] = blk: {
+        var test_config = property_testing.collision_stress_test;
+        test_config.seed = seed; // Use same seed for deterministic testing
+        break :blk test_config;
+    };
+    static.tests[2] = blk: {
+        var test_config = property_testing.hash_exhaustion_test;
+        test_config.seed = seed; // Use same seed for deterministic testing
+        break :blk test_config;
+    };
+    static.tests[3] = blk: {
+        var test_config = property_testing.wal_stress_test;
+        test_config.seed = seed; // Use same seed for deterministic testing
+        break :blk test_config;
+    };
+    static.tests[4] = blk: {
+        var test_config = property_testing.memory_exhaustion_test;
+        test_config.seed = seed; // Use same seed for deterministic testing
+        break :blk test_config;
+    };
+    static.tests[5] = create_recovery_stress_test(seed);
+    static.tests[6] = create_memory_pressure_test(seed);
+    
+    return &static.tests;
 }
 
 fn create_recovery_stress_test(seed: u64) property_testing.PropertyTest {

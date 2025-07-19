@@ -9,13 +9,15 @@ pub const StaticAllocator = @import("allocator.zig").StaticAllocator;
 pub const Database = struct {
     allocator: std.mem.Allocator,
     store: KVStore,
+    wal_corruptions_detected: u64,
 
     pub fn init(allocator: std.mem.Allocator, intent_wal_path: []const u8, completion_wal_path: []const u8) !Database {
-        const store = try KVStore.init(allocator, intent_wal_path, completion_wal_path);
+        const init_result = try KVStore.init_with_corruption_stats(allocator, intent_wal_path, completion_wal_path);
 
         return Database{
             .allocator = allocator,
-            .store = store,
+            .store = init_result.store,
+            .wal_corruptions_detected = init_result.corruption_count,
         };
     }
 
@@ -37,6 +39,10 @@ pub const Database = struct {
 
     pub fn flush(self: *Database) !void {
         return self.store.flush_wal();
+    }
+
+    pub fn get_wal_corruption_count(self: *Database) u64 {
+        return self.wal_corruptions_detected;
     }
 
     // Introspection methods for simulation testing

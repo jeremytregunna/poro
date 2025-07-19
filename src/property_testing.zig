@@ -217,6 +217,7 @@ pub const FailureStats = struct {
     allocator_failures_injected: u64 = 0,
     filesystem_errors_injected: u64 = 0,
     wal_corruptions_injected: u64 = 0,
+    wal_corruptions_detected: u64 = 0,
     iouring_errors_injected: u64 = 0,
     total_operations: u64 = 0,
     
@@ -244,6 +245,7 @@ pub const FailureStats = struct {
             self.total_operations,
             if (self.total_operations > 0) @as(f64, @floatFromInt(self.iouring_errors_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0
         });
+        try writer.print("  WAL corruptions detected: {}\n", .{self.wal_corruptions_detected});
     }
 };
 
@@ -476,11 +478,15 @@ pub const PropertyTest = struct {
             }
         }
         
-        var db = poro.Database.init(self.allocator, intent_wal_path, completion_wal_path) catch {
+        var db_optional: ?poro.Database = poro.Database.init(self.allocator, intent_wal_path, completion_wal_path) catch {
             // Database initialization failure might be expected due to failure injection
             return false;
         };
-        defer db.deinit();
+        defer if (db_optional) |*database| database.deinit();
+        var db = &db_optional.?;
+        
+        // Collect initial WAL corruption statistics
+        self.stats.failures_injected.wal_corruptions_detected += db.get_wal_corruption_count();
         
         // Execute operations
         for (sequence) |op| {
@@ -523,17 +529,25 @@ pub const PropertyTest = struct {
                 .restart => {
                     self.current_condition = .during_recovery;
                     db.deinit();
-                    db = poro.Database.init(self.allocator, intent_wal_path, completion_wal_path) catch {
+                    const new_db = poro.Database.init(self.allocator, intent_wal_path, completion_wal_path) catch {
                         self.current_condition = null;
+                        // Set to null to prevent defer from trying to deinit again
+                        db_optional = null;
                         return false;
                     };
+                    db_optional = new_db;
+                    db = &db_optional.?;
+                    
+                    // Collect WAL corruption statistics from the restart
+                    self.stats.failures_injected.wal_corruptions_detected += db.get_wal_corruption_count();
+                    
                     self.current_condition = null;
                 },
             }
             
             // Check invariants
             for (self.invariants) |invariant| {
-                if (!invariant.check(&db)) {
+                if (!invariant.check(db)) {
                     std.debug.print("Invariant violation: {s}\n", .{invariant.name});
                     self.stats.invariant_violations += 1;
                     if (invariant.severity == .critical) {
