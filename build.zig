@@ -109,6 +109,11 @@ pub fn build(b: *std.Build) void {
 
     const run_prop_runner = b.addRunArtifact(prop_runner);
     run_prop_runner.step.dependOn(b.getInstallStep());
+    
+    // Forward command line arguments to prop_runner
+    if (b.args) |args| {
+        run_prop_runner.addArgs(args);
+    }
 
     const prop_step = b.step("prop", "Run property-based tests");
     prop_step.dependOn(&run_prop_runner.step);
