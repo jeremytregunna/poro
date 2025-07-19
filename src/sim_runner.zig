@@ -17,8 +17,12 @@ pub fn main() !void {
     const temp_dir = "/tmp/poro_sim";
     std.fs.makeDirAbsolute(temp_dir) catch {};
 
-    // Parse seed if provided
-    var seed: u64 = 12345; // default seed
+    // Parse seed if provided, otherwise use random seed
+    var seed: u64 = blk: {
+        var buf: [8]u8 = undefined;
+        std.crypto.random.bytes(buf[0..]);
+        break :blk std.mem.readInt(u64, &buf, .little);
+    };
     var arg_offset: usize = 1;
     
     if (args.len > 2 and std.mem.eql(u8, args[1], "--seed")) {

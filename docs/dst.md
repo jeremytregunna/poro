@@ -88,7 +88,7 @@ const offset = config.offset orelse self.prng.random().uintLessThan(usize, file_
 
 1. **Scenario-specific seed**: If corruption config specifies `seed` field
 2. **Simulator seed**: Provided via `--seed` argument or `initWithSeed()`
-3. **Default seed**: 12345 if no seed specified
+3. **Random seed**: Cryptographically secure random seed if no seed specified
 
 ## Available Scenarios
 
@@ -129,7 +129,7 @@ const offset = config.offset orelse self.prng.random().uintLessThan(usize, file_
 
 #### Run All Scenarios
 ```bash
-# Default seed (12345)
+# Random seed (different corruption patterns each run)
 ./zig-out/bin/sim_runner
 
 # Specific seed for deterministic results
@@ -138,7 +138,7 @@ const offset = config.offset orelse self.prng.random().uintLessThan(usize, file_
 
 #### Run Specific Scenario
 ```bash
-# Single scenario with default seed
+# Single scenario with random seed
 ./zig-out/bin/sim_runner --scenario perfect
 
 # Single scenario with specific seed

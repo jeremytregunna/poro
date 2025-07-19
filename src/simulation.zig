@@ -68,7 +68,11 @@ pub const Simulator = struct {
     seed: u64,
 
     pub fn init(allocator: std.mem.Allocator, temp_dir: []const u8) Simulator {
-        return Simulator.initWithSeed(allocator, temp_dir, 12345);
+        // Generate random seed for non-deterministic behavior by default
+        var buf: [8]u8 = undefined;
+        std.crypto.random.bytes(buf[0..]);
+        const random_seed = std.mem.readInt(u64, &buf, .little);
+        return Simulator.initWithSeed(allocator, temp_dir, random_seed);
     }
 
     pub fn initWithSeed(allocator: std.mem.Allocator, temp_dir: []const u8, seed: u64) Simulator {
@@ -203,7 +207,8 @@ pub const Simulator = struct {
             },
             .random_corruption => {
                 // Use scenario-specific seed if provided, otherwise use simulator seed
-                var local_prng = std.Random.DefaultPrng.init(if (config.seed != 12345) config.seed else self.seed);
+                const effective_seed = if (config.seed != 12345) config.seed else self.seed;
+                var local_prng = std.Random.DefaultPrng.init(effective_seed);
                 var corrupt_data: [16]u8 = undefined;
                 local_prng.random().bytes(&corrupt_data);
                 const write_size = @min(corrupt_data.len, file_size - offset);
