@@ -1,325 +1,468 @@
-# Deterministic Simulation Testing (DST) Framework
-
-The Poro database includes a comprehensive deterministic simulation testing framework designed to test database behavior under controlled failure conditions, including scenarios that simulate real-world issues like hardware failures, cosmic ray corruption, and system crashes.
+# DST v2: Property-Based Testing Framework
 
 ## Overview
 
-The DST framework provides:
-- **Deterministic corruption injection** with reproducible results
-- **Scenario-based testing** covering various failure modes
-- **Recovery verification** to ensure data integrity
-- **Seed-based randomness** for consistent test outcomes
+DST v2 is a comprehensive property-based testing framework for the Poro database that provides:
+- Randomized operation sequence generation
+- Probability-based failure injection across all system layers
+- Automatic test case shrinking for minimal failure reproduction
+- Whole-system testing with statistical verification
+- Future-ready architecture for virtual time control
 
 ## Architecture
 
-### Core Components
+### Core Principles
 
-#### Simulator (`src/simulation.zig`)
-The main orchestrator that runs test scenarios and manages corruption injection.
+1. **Property-Based Testing**: Generate random operation sequences and verify system invariants hold
+2. **Whole-System Testing**: Test the complete database as a black box, not isolated components
+3. **Probabilistic Failure Injection**: Control failure rates with statistical verification
+4. **Automatic Shrinking**: Find minimal reproduction cases when failures occur
+5. **Seed-Controlled Determinism**: Reproducible randomness for debugging
+6. **Low Performance Impact**: Minimal instrumentation overhead
+7. **Future Extensibility**: Ready for virtual time injection and advanced scenarios
 
-```zig
-pub const Simulator = struct {
-    allocator: std.mem.Allocator,
-    temp_dir: []const u8,
-    prng: std.Random.DefaultPrng,  // Deterministic PRNG
-    seed: u64,                     // Controls randomness
-}
-```
+### Framework Components
 
-#### Simulation Scenarios
-Pre-defined test scenarios that describe sequences of database operations and failure conditions.
+#### 1. Property Test Definition
 
 ```zig
-pub const SimulationScenario = struct {
+pub const PropertyTest = struct {
     name: []const u8,
-    description: []const u8,
-    operations: []const Operation,
-    corruption_config: ?CorruptionConfig = null,
-}
+    generators: PropertyGenerators,
+    failure_injectors: FailureInjectionConfig,
+    invariants: []InvariantChecker,
+    shrinking: ShrinkingConfig,
+    execution: ExecutionConfig,
+    stats: TestStatistics,
+};
 ```
 
-#### Operations
-Atomic operations that can be performed during a scenario:
-- `set` - Store key-value pair
-- `get` - Retrieve and validate value
-- `del` - Delete key and verify
-- `flush` - Force WAL flush
-- `inject_corruption` - Corrupt WAL files
-- `restart_db` - Simulate database restart/recovery
+#### 2. Operation Generation
 
-## Deterministic Seed System
-
-### How Seeds Work
-
-The DST framework uses a pseudorandom number generator (PRNG) initialized with a seed to ensure **deterministic randomness**. This means:
-
-1. **Same seed = Same results**: Running the same scenario with the same seed will always produce identical corruption patterns
-2. **Different seeds = Different patterns**: Different seeds explore different failure scenarios
-3. **Reproducible debugging**: Failed tests can be reproduced exactly using the same seed
-
-### Seed Usage
-
-Seeds affect the following random operations:
-
-#### Random Corruption Content
 ```zig
-.random_corruption => {
-    var local_prng = std.Random.DefaultPrng.init(seed);
-    var corrupt_data: [16]u8 = undefined;
-    local_prng.random().bytes(&corrupt_data);  // Deterministic "random" bytes
-}
+pub const PropertyGenerators = struct {
+    // Operation distribution control
+    operation_distribution: OperationDistribution,
+    
+    // Key generation strategies
+    key_generators: KeyGenerationStrategy,
+    
+    // Value generation strategies  
+    value_generators: ValueGenerationStrategy,
+    
+    // Sequence characteristics
+    sequence_length: Range(usize),
+    operation_timing: TimingStrategy,
+    
+    // Conditional generation (e.g., more deletes after sets)
+    conditional_probabilities: []ConditionalProbability,
+};
+
+pub const OperationDistribution = struct {
+    set_probability: f64,
+    get_probability: f64,
+    del_probability: f64,
+    flush_probability: f64,
+    restart_probability: f64,
+};
+
+pub const KeyGenerationStrategy = union(enum) {
+    uniform_random: struct { min_length: usize, max_length: usize },
+    zipf_distribution: struct { alpha: f64, max_rank: usize },
+    collision_prone: struct { hash_collision_rate: f64 },
+    sequential: struct { prefix: []const u8 },
+    mixed: struct { strategies: []KeyGenerationStrategy, weights: []f64 },
+};
+
+pub const ValueGenerationStrategy = union(enum) {
+    fixed_size: usize,
+    variable_size: Range(usize),
+    power_law: struct { min: usize, max: usize, alpha: f64 },
+    compressible: struct { repetition_factor: f64 },
+    random_binary: void,
+};
 ```
 
-#### Random Offset Selection
+#### 3. Failure Injection System
+
 ```zig
-// When no specific offset is provided in corruption config
-const offset = config.offset orelse self.prng.random().uintLessThan(usize, file_size);
+pub const FailureInjectionConfig = struct {
+    // Base failure probabilities
+    allocator_failure_probability: f64,
+    filesystem_error_probability: f64,
+    iouring_error_probability: f64,
+    hash_collision_probability: f64,
+    timing_variance_probability: f64,
+    
+    // Failure type distributions
+    filesystem_error_distribution: FilesystemErrorDistribution,
+    allocator_failure_distribution: AllocatorFailureDistribution,
+    
+    // Conditional probability multipliers
+    conditional_multipliers: []ConditionalMultiplier,
+    
+    // Failure clustering (multiple failures in sequence)
+    failure_clustering: ClusteringConfig,
+    
+    // Recovery from failures
+    recovery_probabilities: RecoveryConfig,
+};
+
+pub const ConditionalMultiplier = struct {
+    condition: SystemCondition,
+    multiplier: f64,
+    duration: Duration,
+};
+
+pub const SystemCondition = enum {
+    during_recovery,
+    under_memory_pressure,
+    high_operation_rate,
+    after_restart,
+    during_flush,
+    hash_table_resize,
+};
+
+pub const ClusteringConfig = struct {
+    cluster_probability: f64,
+    cluster_size_distribution: Range(u32),
+    cluster_spacing: Range(u64), // operations between clusters
+};
 ```
 
-#### Bit Flip Position
+#### 4. Invariant Checking
+
 ```zig
-.bit_flip => {
-    // Random bit position (0-6) determined by seed
-    byte[0] ^= @as(u8, 1) << self.prng.random().uintLessThan(u3, 7);
-}
-```
+pub const InvariantChecker = struct {
+    name: []const u8,
+    check_fn: *const fn(db: *Database, history: []Operation, stats: *SystemStats) bool,
+    severity: InvariantSeverity,
+    check_frequency: CheckFrequency,
+};
 
-### Seed Priority
+pub const InvariantSeverity = enum {
+    critical,    // Data corruption, crashes
+    important,   // Performance degradation, resource leaks
+    advisory,    // Suboptimal behavior
+};
 
-1. **Scenario-specific seed**: If corruption config specifies `seed` field
-2. **Simulator seed**: Provided via `--seed` argument or `initWithSeed()`
-3. **Random seed**: Cryptographically secure random seed if no seed specified
+pub const CheckFrequency = union(enum) {
+    every_operation,
+    periodic: u32,  // every N operations
+    on_condition: SystemCondition,
+    at_end,
+};
 
-## Available Scenarios
-
-### 1. Perfect Conditions
-**Purpose**: Baseline test under normal operating conditions  
-**Operations**: SET, GET, DEL, flush, restart, verify recovery  
-**Corruption**: None  
-**Validates**: Basic functionality and recovery without failures
-
-### 2. WAL Corruption Recovery
-**Purpose**: Test recovery from intent WAL corruption  
-**Corruption**: Bit flip in intent WAL at offset 10  
-**Validates**: Database continues operating after WAL corruption
-
-### 3. Completion WAL Corruption
-**Purpose**: Test incomplete transaction handling  
-**Corruption**: Random corruption at completion WAL offset 0  
-**Validates**: Incomplete transactions are not applied during recovery
-
-### 4. Massive Data Load
-**Purpose**: Test performance and reliability with large data  
-**Operations**: Large values (1KB-3KB), restart, verify  
-**Validates**: Large data handling and recovery
-
-### 5. Random Corruption (Cosmic Ray Simulation)
-**Purpose**: Simulate cosmic ray-like random bit flips  
-**Corruption**: Random corruption in intent WAL  
-**Validates**: Graceful degradation under random failures
-
-### 6. WAL Truncation
-**Purpose**: Test recovery from partial WAL truncation  
-**Corruption**: Truncate intent WAL at offset 50  
-**Validates**: Recovery handles incomplete WAL files
-
-## Usage
-
-### Command Line Interface
-
-#### Run All Scenarios
-```bash
-# Random seed (different corruption patterns each run)
-./zig-out/bin/sim_runner
-
-# Specific seed for deterministic results
-./zig-out/bin/sim_runner --seed 42
-```
-
-#### Run Specific Scenario
-```bash
-# Single scenario with random seed
-./zig-out/bin/sim_runner --scenario perfect
-
-# Single scenario with specific seed
-./zig-out/bin/sim_runner --seed 999 --scenario completion_corruption
-```
-
-#### Available Scenarios
-- `perfect` - Perfect Conditions
-- `corruption` - WAL Corruption Recovery
-- `completion_corruption` - Completion WAL Corruption
-- `massive` - Massive Data Load
-- `random` - Random Corruption
-- `truncation` - WAL Truncation
-
-### Programmatic Usage
-
-#### Basic Simulator
-```zig
-var simulator = simulation.Simulator.init(allocator, "/tmp/test");
-const result = try simulator.run_scenario(simulation.perfect_conditions_scenario);
-```
-
-#### With Specific Seed
-```zig
-var simulator = simulation.Simulator.initWithSeed(allocator, "/tmp/test", 42);
-const result = try simulator.run_scenario(simulation.random_corruption_scenario);
-```
-
-## Corruption Types
-
-### Bit Flip
-Single bit corruption simulating cosmic rays or memory errors:
-```zig
-.bit_flip => {
-    byte[0] ^= @as(u8, 1) << random_bit_position;
-}
-```
-
-### Byte Zero
-Overwrite byte with zero, simulating certain hardware failures:
-```zig
-.byte_zero => {
-    const zero_byte: [1]u8 = .{0};
-    try file.writeAll(&zero_byte);
-}
-```
-
-### Truncation
-Simulate incomplete writes or filesystem issues:
-```zig
-.truncation => {
-    try file.setEndPos(offset);  // Truncate file at offset
-}
-```
-
-### Random Corruption
-Comprehensive corruption with random data:
-```zig
-.random_corruption => {
-    var corrupt_data: [16]u8 = undefined;
-    prng.random().bytes(&corrupt_data);  // 16 bytes of random corruption
-    try file.writeAll(corrupt_data[0..write_size]);
-}
-```
-
-## Test Results and Verification
-
-### SimulationResult Structure
-```zig
-pub const SimulationResult = struct {
-    scenario_name: []const u8,
-    success: bool,
-    error_message: ?[]const u8 = null,
-    operations_completed: usize,
-    recovery_verified: bool = false,
-}
-```
-
-### Success Criteria
-A scenario passes when:
-1. All operations complete successfully (`operations_completed == expected`)
-2. Recovery verification passes (`recovery_verified == true`)
-3. No errors occur during execution (`error_message == null`)
-
-## Integration with CI/CD
-
-### Deterministic Testing
-```bash
-# In CI pipeline - always same results
-./zig-out/bin/sim_runner --seed 42
-if [ $? -ne 0 ]; then
-    echo "Simulation tests failed"
-    exit 1
-fi
-```
-
-### Multi-Seed Testing
-```bash
-# Test multiple corruption patterns
-for seed in 42 999 12345 67890; do
-    echo "Testing with seed $seed"
-    ./zig-out/bin/sim_runner --seed $seed
-done
-```
-
-### Build Integration
-```bash
-# Build target for simulation tests
-zig build sim
-```
-
-## Creating Custom Scenarios
-
-### Define Scenario
-```zig
-pub const my_custom_scenario = SimulationScenario{
-    .name = "My Custom Test",
-    .description = "Tests specific failure condition",
-    .operations = &[_]SimulationScenario.Operation{
-        .{ .set = .{ .key = "test_key", .value = "test_value" } },
-        .flush,
-        .{ .inject_corruption = .{
-            .corruption_type = .bit_flip,
-            .target_file = .intent_wal,
-            .offset = 20,
-            .seed = 54321,  // Optional: scenario-specific seed
-        } },
-        .restart_db,
-        .{ .get = .{ .key = "test_key", .expected = "test_value" } },
+// Built-in invariant checkers
+pub const builtin_invariants = [_]InvariantChecker{
+    .{
+        .name = "data_consistency",
+        .check_fn = check_data_consistency,
+        .severity = .critical,
+        .check_frequency = .every_operation,
+    },
+    .{
+        .name = "memory_balance", 
+        .check_fn = check_memory_balance,
+        .severity = .critical,
+        .check_frequency = .periodic(100),
+    },
+    .{
+        .name = "transaction_atomicity",
+        .check_fn = check_transaction_atomicity,
+        .severity = .critical,
+        .check_frequency = .on_condition(.during_recovery),
+    },
+    .{
+        .name = "hash_table_integrity",
+        .check_fn = check_hash_table_integrity,
+        .severity = .critical,
+        .check_frequency = .on_condition(.hash_table_resize),
+    },
+    .{
+        .name = "wal_consistency",
+        .check_fn = check_wal_consistency,
+        .severity = .critical,
+        .check_frequency = .on_condition(.during_flush),
     },
 };
 ```
 
-### Corruption Configuration
+#### 5. Shrinking Framework
+
 ```zig
-pub const CorruptionConfig = struct {
-    corruption_type: CorruptionType,
-    target_file: enum { intent_wal, completion_wal },
-    offset: ?usize = null,        // Random if null
-    probability: f32 = 1.0,       // Future: probabilistic corruption
-    seed: u64 = 12345,           // Scenario-specific seed
+pub const ShrinkingConfig = struct {
+    max_shrink_attempts: u32,
+    shrink_strategies: []ShrinkStrategy,
+    preserve_failure_conditions: bool,
+    shrink_timeout: Duration,
+};
+
+pub const ShrinkStrategy = enum {
+    remove_operations,           // Remove operations from sequence
+    simplify_values,            // Use smaller, simpler values
+    reduce_key_diversity,       // Use fewer unique keys
+    eliminate_redundancy,       // Remove duplicate operations
+    focus_around_failure,       // Keep operations near failure point
+    preserve_failure_pattern,   // Maintain failure injection sequence
+};
+
+pub const ShrinkResult = struct {
+    original_sequence_length: usize,
+    shrunk_sequence_length: usize,
+    shrink_iterations: u32,
+    shrinking_time: Duration,
+    minimal_reproduction: []Operation,
+    failure_preserved: bool,
 };
 ```
 
-## Best Practices
+#### 6. Statistics and Reporting
 
-### For Development
-1. **Use deterministic seeds** during development for reproducible debugging
-2. **Test multiple seeds** to ensure robustness across different corruption patterns
-3. **Validate recovery** in all scenarios involving corruption
-4. **Keep scenarios focused** on specific failure modes
+```zig
+pub const TestStatistics = struct {
+    // Execution statistics
+    total_operations_generated: u64,
+    unique_sequences_tested: u32,
+    test_execution_time: Duration,
+    
+    // Failure injection statistics
+    failures_injected: FailureStats,
+    probability_hit_rates: ProbabilityStats,
+    failure_clustering_achieved: ClusteringStats,
+    
+    // Invariant violation statistics
+    invariant_violations: InvariantViolationStats,
+    
+    // Coverage metrics
+    coverage_metrics: CoverageMetrics,
+    
+    // Shrinking statistics
+    shrinking_stats: ShrinkingStats,
+    
+    // Performance impact
+    overhead_measurements: OverheadStats,
+};
 
-### For CI/CD
-1. **Use fixed seeds** in CI for consistent results
-2. **Test critical scenarios** with multiple seeds
-3. **Monitor test execution time** for performance regressions
-4. **Archive test results** with seed information for debugging
+pub const FailureStats = struct {
+    allocator_failures: FailureTypeStats,
+    filesystem_errors: FailureTypeStats,
+    iouring_errors: FailureTypeStats,
+    hash_collisions: FailureTypeStats,
+    timing_variances: FailureTypeStats,
+    
+    total_failures_injected: u64,
+    failure_sequences: u32,
+    clustered_failures: u32,
+};
 
-### For Debugging
-1. **Use same seed** to reproduce failures exactly
-2. **Add debug output** to understand corruption effects
-3. **Test incremental changes** with known working seeds
-4. **Document seed values** that expose specific bugs
+pub const ProbabilityStats = struct {
+    target_probabilities: []f64,
+    achieved_probabilities: []f64,
+    statistical_significance: []f64,
+    confidence_intervals: []ConfidenceInterval,
+};
 
-## Future Enhancements
+pub const CoverageMetrics = struct {
+    // Code path coverage
+    functions_exercised: FunctionCoverage,
+    branches_taken: BranchCoverage,
+    
+    // State space coverage
+    hash_table_states: StateSpaceCoverage,
+    wal_states: StateSpaceCoverage,
+    allocator_states: StateSpaceCoverage,
+    
+    // Error path coverage
+    error_paths_exercised: ErrorPathCoverage,
+    recovery_scenarios_tested: RecoveryScenarioCoverage,
+};
+```
 
-### Planned Features
-- **Probabilistic corruption**: Specify probability of corruption occurring
-- **Multi-file corruption**: Corrupt multiple WAL files simultaneously  
-- **Network partition simulation**: Simulate distributed system failures
-- **Performance benchmarking**: Measure impact of corruption on performance
-- **Automated seed discovery**: Find seeds that trigger specific conditions
+#### 7. Future Time Control Interface
 
-### Extension Points
-- **Custom corruption types**: Add domain-specific corruption patterns
-- **External validators**: Integrate with external consistency checkers
-- **Metrics collection**: Gather detailed performance and reliability metrics
-- **Scenario composition**: Combine multiple scenarios into test suites
+```zig
+// Future extension point for virtual time control
+pub const TimeController = struct {
+    virtual_time_enabled: bool = false,
+    current_virtual_time: VirtualTime = 0,
+    time_acceleration_factor: f64 = 1.0,
+    
+    // Time injection points (future implementation)
+    time_injection_points: []TimeInjectionPoint,
+    
+    // Clock skew simulation (future implementation)  
+    clock_skew_enabled: bool = false,
+    clock_skew_parameters: ClockSkewConfig,
+    
+    // Interface for future virtual time
+    pub fn advance_time(self: *TimeController, duration: Duration) void {
+        if (self.virtual_time_enabled) {
+            self.current_virtual_time += @intCast(duration * self.time_acceleration_factor);
+        }
+    }
+    
+    pub fn inject_timing_variance(self: *TimeController, base_duration: Duration) Duration {
+        // Future: complex timing variance injection
+        return base_duration;
+    }
+};
 
-## Conclusion
+// Future virtual time types
+pub const VirtualTime = u64; // nanoseconds in virtual time
+pub const TimeInjectionPoint = struct {
+    location: InjectionLocation,
+    variance_type: TimingVarianceType,
+    parameters: TimingParameters,
+};
+```
 
-The Deterministic Simulation Testing framework provides comprehensive, reproducible testing of database reliability under adverse conditions. By using deterministic seeds and controlled corruption injection, it enables thorough validation of recovery mechanisms and helps ensure data integrity in production environments.
+### Implementation Strategy
 
-The framework serves as both a testing tool and a demonstration of robust database design principles, showing how proper WAL implementation and recovery logic can handle real-world failure scenarios gracefully.
+#### Phase 1: Core Framework
+1. **Property test definition and execution engine** (`src/property_testing.zig`)
+2. **Basic operation generation** with simple distributions
+3. **Minimal failure injection** at filesystem boundary
+4. **Simple shrinking algorithm** (remove operations strategy)
+5. **Basic statistics collection**
+
+#### Phase 2: Advanced Generation
+1. **Sophisticated key/value generation strategies**
+2. **Conditional probability support**
+3. **Operation timing strategies**
+4. **Complex failure injection patterns**
+
+#### Phase 3: Comprehensive Analysis
+1. **Full invariant checking framework**
+2. **Advanced shrinking strategies**
+3. **Coverage metrics collection**
+4. **Statistical analysis and reporting**
+
+#### Phase 4: Future Extensions
+1. **Virtual time control implementation**
+2. **Advanced timing variance injection**
+3. **Distributed testing scenarios**
+4. **Performance regression detection**
+
+### Usage Examples
+
+#### Basic Property Test
+
+```zig
+const basic_property_test = PropertyTest{
+    .name = "basic_operations_under_failures",
+    .generators = .{
+        .operation_distribution = .{
+            .set_probability = 0.4,
+            .get_probability = 0.4,
+            .del_probability = 0.15,
+            .flush_probability = 0.04,
+            .restart_probability = 0.01,
+        },
+        .key_generators = .{
+            .uniform_random = .{ .min_length = 1, .max_length = 32 }
+        },
+        .value_generators = .{
+            .variable_size = .{ .min = 1, .max = 1024 }
+        },
+        .sequence_length = .{ .min = 100, .max = 10000 },
+    },
+    .failure_injectors = .{
+        .allocator_failure_probability = 0.001,
+        .filesystem_error_probability = 0.005,
+        .conditional_multipliers = &[_]ConditionalMultiplier{
+            .{ .condition = .during_recovery, .multiplier = 10.0, .duration = .forever },
+        },
+    },
+    .invariants = &builtin_invariants,
+    .shrinking = .{
+        .max_shrink_attempts = 1000,
+        .shrink_strategies = &[_]ShrinkStrategy{
+            .remove_operations,
+            .simplify_values,
+            .focus_around_failure,
+        },
+        .preserve_failure_conditions = true,
+    },
+};
+```
+
+#### Hash Collision Stress Test
+
+```zig
+const collision_stress_test = PropertyTest{
+    .name = "hash_collision_exhaustion",
+    .generators = .{
+        .key_generators = .{
+            .collision_prone = .{ .hash_collision_rate = 0.8 }
+        },
+        .sequence_length = .{ .min = 10000, .max = 100000 },
+    },
+    .failure_injectors = .{
+        .hash_collision_probability = 0.9, // Force high collision rate
+        .allocator_failure_probability = 0.01, // Test resize failures
+    },
+    .invariants = &[_]InvariantChecker{
+        builtin_invariants[3], // hash_table_integrity
+        builtin_invariants[0], // data_consistency
+    },
+};
+```
+
+#### Recovery Stress Test
+
+```zig
+const recovery_stress_test = PropertyTest{
+    .name = "recovery_under_pressure",
+    .generators = .{
+        .operation_distribution = .{
+            .restart_probability = 0.1, // Frequent restarts
+        },
+    },
+    .failure_injectors = .{
+        .conditional_multipliers = &[_]ConditionalMultiplier{
+            .{ .condition = .during_recovery, .multiplier = 50.0 },
+            .{ .condition = .under_memory_pressure, .multiplier = 20.0 },
+        },
+        .failure_clustering = .{
+            .cluster_probability = 0.3,
+            .cluster_size_distribution = .{ .min = 2, .max = 10 },
+        },
+    },
+    .invariants = &[_]InvariantChecker{
+        builtin_invariants[2], // transaction_atomicity
+        builtin_invariants[4], // wal_consistency
+    },
+};
+```
+
+### Integration with Current Framework
+
+The property-based testing framework will coexist with the current scenario-based testing:
+
+- **Scenario Tests**: Continue to provide regression testing and basic functionality verification
+- **Property Tests**: Provide comprehensive exploration of failure space and edge cases
+- **Unified CLI**: Both testing approaches accessible through the simulation runner
+- **Shared Infrastructure**: Leverage existing filesystem abstraction and dependency injection
+
+### Statistical Requirements
+
+Property tests must provide statistical validation:
+
+1. **Probability Target Achievement**: Verify that failure injection rates match configured probabilities within confidence intervals
+2. **Coverage Metrics**: Track which system states and error paths have been exercised
+3. **Invariant Violation Rates**: Monitor frequency and types of invariant violations
+4. **Shrinking Effectiveness**: Measure how well shrinking reduces failing test cases
+
+### Success Criteria
+
+A successful DST v2 implementation will:
+
+1. **Discover Unknown Bugs**: Find edge cases and race conditions not covered by manual scenarios
+2. **Provide Reproducible Failures**: Shrink complex failures to minimal reproduction cases
+3. **Verify Statistical Properties**: Confirm system behavior under probabilistic failure injection
+4. **Scale to Complex Scenarios**: Handle thousands of operations with multiple simultaneous failures
+5. **Maintain Low Overhead**: <5% performance impact on database operations during testing
+6. **Generate Actionable Reports**: Provide clear statistics and reproduction steps for failures
+
+This framework positions Poro's testing infrastructure as a state-of-the-art example of property-based database testing with comprehensive failure injection and statistical validation.
