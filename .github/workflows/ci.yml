@@ -61,7 +61,7 @@ jobs:
           ${{ runner.os }}-zig-
 
     - name: Build property test runner
-      run: zig build prop_runner
+      run: zig build prop
 
     - name: Run basic property tests (fast)
       run: zig build sim -- --test basic --iterations 25 --seed 42
@@ -107,7 +107,7 @@ jobs:
           ${{ runner.os }}-zig-
 
     - name: Build property test runner
-      run: zig build prop_runner
+      run: zig build prop
 
     - name: Run full simulation suite
       run: zig build sim -- --iterations 100
