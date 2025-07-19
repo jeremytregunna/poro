@@ -166,7 +166,9 @@ pub const RealFilesystem = struct {
 
         return FileHandle{
             .id = handle_id,
-            .path = try self.allocator.dupe(u8, path),
+            const duplicated_path = try self.allocator.dupe(u8, path);
+            defer if (handle_id == undefined) self.allocator.free(duplicated_path);
+            .path = duplicated_path,
         };
     }
 
