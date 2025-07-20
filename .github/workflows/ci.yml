@@ -61,31 +61,31 @@ jobs:
           ${{ runner.os }}-zig-
 
     - name: Run basic simulation test
-      run: zig build sim -- --test basic --iterations 2 --seed 42
+      run: zig build sim -- --test basic --iterations 2
       timeout-minutes: 2
-      
+
     - name: Run collision stress test
-      run: zig build sim -- --test collision --iterations 2 --seed 123
+      run: zig build sim -- --test collision --iterations 2
       timeout-minutes: 2
-      
+
     - name: Run hash exhaustion test
-      run: zig build sim -- --test exhaustion --iterations 2 --seed 456
+      run: zig build sim -- --test exhaustion --iterations 2
       timeout-minutes: 3
-      
+
     - name: Run WAL stress test
-      run: zig build sim -- --test wal_stress --iterations 2 --seed 789
+      run: zig build sim -- --test wal_stress --iterations 2
       timeout-minutes: 3
-      
+
     - name: Run memory exhaustion test
-      run: zig build sim -- --test memory_exhaustion --iterations 2 --seed 101112
+      run: zig build sim -- --test memory_exhaustion --iterations 2
       timeout-minutes: 3
-      
+
     - name: Run recovery stress test
-      run: zig build sim -- --test recovery --iterations 2 --seed 131415
+      run: zig build sim -- --test recovery --iterations 2
       timeout-minutes: 3
-      
+
     - name: Run memory pressure test
-      run: zig build sim -- --test memory_pressure --iterations 2 --seed 161718
+      run: zig build sim -- --test memory_pressure --iterations 2
       timeout-minutes: 5
 
   benchmark:
