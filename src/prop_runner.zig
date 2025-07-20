@@ -86,31 +86,31 @@ pub fn main() !void {
     } else {
         // Run all tests
         const tests = get_all_tests(seed);
-        
+
         try stdout.print("Running {} property tests...\n\n", .{tests.len});
-        
+
         var passed: u32 = 0;
         var failed: u32 = 0;
-        
+
         for (tests) |test_config| {
             try stdout.print("--- Running: {s} ---\n", .{test_config.name});
-            
+
             const result = runner.run_test(test_config, iterations);
             result catch |err| {
                 try stdout.print("❌ FAILED: {s} - {}\n\n", .{ test_config.name, err });
                 failed += 1;
                 continue;
             };
-            
+
             try stdout.print("✅ PASSED: {s}\n\n", .{test_config.name});
             passed += 1;
         }
-        
+
         try stdout.print("=== Property Test Summary ===\n", .{});
         try stdout.print("Passed: {}\n", .{passed});
         try stdout.print("Failed: {}\n", .{failed});
         try stdout.print("Total:  {}\n", .{tests.len});
-        
+
         if (failed > 0) {
             std.process.exit(1);
         }
@@ -179,7 +179,7 @@ fn get_all_tests(seed: u64) []const property_testing.PropertyTest {
     const static = struct {
         var tests: [7]property_testing.PropertyTest = undefined;
     };
-    
+
     static.tests[0] = blk: {
         var test_config = property_testing.basic_property_test;
         test_config.seed = seed;
@@ -207,7 +207,7 @@ fn get_all_tests(seed: u64) []const property_testing.PropertyTest {
     };
     static.tests[5] = create_recovery_stress_test(seed);
     static.tests[6] = create_memory_pressure_test(seed);
-    
+
     return &static.tests;
 }
 

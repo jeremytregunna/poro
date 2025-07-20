@@ -77,8 +77,8 @@ pub const Database = struct {
 };
 
 pub const DatabaseStats = struct {
-    size: usize,       // Number of active (non-deleted) entries
-    capacity: usize,   // Hash table capacity
+    size: usize, // Number of active (non-deleted) entries
+    capacity: usize, // Hash table capacity
     entries_count: usize, // Total entries (including deleted)
 };
 

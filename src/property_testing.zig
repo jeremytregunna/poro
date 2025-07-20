@@ -16,7 +16,7 @@ pub const PropertyTestingError = error{
 pub const Range = struct {
     min: usize,
     max: usize,
-    
+
     pub fn sample(self: Range, prng: *std.Random.DefaultPrng) usize {
         if (self.min == self.max) return self.min;
         return self.min + prng.random().uintLessThan(usize, self.max - self.min + 1);
@@ -32,10 +32,10 @@ pub const OperationDistribution = struct {
     del_probability: f64 = 0.15,
     flush_probability: f64 = 0.04,
     restart_probability: f64 = 0.01,
-    
+
     pub fn normalize(self: *OperationDistribution) void {
-        const total = self.set_probability + self.get_probability + self.del_probability + 
-                     self.flush_probability + self.restart_probability;
+        const total = self.set_probability + self.get_probability + self.del_probability +
+            self.flush_probability + self.restart_probability;
         if (total > 0) {
             self.set_probability /= total;
             self.get_probability /= total;
@@ -44,23 +44,23 @@ pub const OperationDistribution = struct {
             self.restart_probability /= total;
         }
     }
-    
+
     pub fn sample(self: OperationDistribution, prng: *std.Random.DefaultPrng) OperationType {
         const rand = prng.random().float(f64);
         var cumulative: f64 = 0;
-        
+
         cumulative += self.set_probability;
         if (rand < cumulative) return .set;
-        
+
         cumulative += self.get_probability;
         if (rand < cumulative) return .get;
-        
+
         cumulative += self.del_probability;
         if (rand < cumulative) return .del;
-        
+
         cumulative += self.flush_probability;
         if (rand < cumulative) return .flush;
-        
+
         return .restart;
     }
 };
@@ -77,7 +77,7 @@ pub const KeyGenerationStrategy = union(enum) {
     uniform_random: struct { min_length: usize, max_length: usize },
     collision_prone: struct { hash_collision_rate: f64 },
     sequential: struct { prefix: []const u8 },
-    
+
     pub fn generate_key(self: KeyGenerationStrategy, allocator: std.mem.Allocator, prng: *std.Random.DefaultPrng, existing_keys: [][]const u8) ![]u8 {
         switch (self) {
             .uniform_random => |config| {
@@ -111,7 +111,7 @@ pub const KeyGenerationStrategy = union(enum) {
                 var key = try allocator.alloc(u8, config.prefix.len + 8);
                 @memcpy(key[0..config.prefix.len], config.prefix);
                 const suffix = std.fmt.bufPrint(key[config.prefix.len..], "{d:0>8}", .{prng.random().int(u32)}) catch unreachable;
-                return key[0..config.prefix.len + suffix.len];
+                return key[0 .. config.prefix.len + suffix.len];
             },
         }
     }
@@ -121,14 +121,14 @@ pub const ValueGenerationStrategy = union(enum) {
     fixed_size: usize,
     variable_size: Range,
     random_binary: void,
-    
+
     pub fn generate_value(self: ValueGenerationStrategy, allocator: std.mem.Allocator, prng: *std.Random.DefaultPrng) ![]u8 {
         const size = switch (self) {
             .fixed_size => |s| s,
             .variable_size => |r| r.sample(prng),
             .random_binary => 64 + prng.random().uintLessThan(usize, 960), // 64-1024 bytes
         };
-        
+
         const value = try allocator.alloc(u8, size);
         switch (self) {
             .random_binary => {
@@ -173,10 +173,10 @@ pub const FailureInjectionConfig = struct {
     wal_corruption_probability: f64 = 0.0,
     iouring_error_probability: f64 = 0.0,
     conditional_multipliers: []const ConditionalMultiplier = &[_]ConditionalMultiplier{},
-    
+
     pub fn get_effective_probability(self: FailureInjectionConfig, base_probability: f64, current_condition: ?SystemCondition) f64 {
         var effective = base_probability;
-        
+
         if (current_condition) |condition| {
             for (self.conditional_multipliers) |multiplier| {
                 if (multiplier.condition == condition) {
@@ -185,7 +185,7 @@ pub const FailureInjectionConfig = struct {
                 }
             }
         }
-        
+
         return @min(effective, 1.0);
     }
 };
@@ -196,7 +196,7 @@ pub const GeneratedOperation = struct {
     key: ?[]u8 = null,
     value: ?[]u8 = null,
     expected_result: ?ExpectedResult = null,
-    
+
     pub fn deinit(self: GeneratedOperation, allocator: std.mem.Allocator) void {
         if (self.key) |key| allocator.free(key);
         if (self.value) |value| allocator.free(value);
@@ -220,31 +220,15 @@ pub const FailureStats = struct {
     wal_corruptions_detected: u64 = 0,
     iouring_errors_injected: u64 = 0,
     total_operations: u64 = 0,
-    
+
     pub fn format(self: FailureStats, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
         try writer.print("Failure Stats:\n", .{});
-        try writer.print("  Allocator failures: {}/{} ({d:.2}%)\n", .{
-            self.allocator_failures_injected, 
-            self.total_operations,
-            if (self.total_operations > 0) @as(f64, @floatFromInt(self.allocator_failures_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0
-        });
-        try writer.print("  Filesystem errors: {}/{} ({d:.2}%)\n", .{
-            self.filesystem_errors_injected,
-            self.total_operations,
-            if (self.total_operations > 0) @as(f64, @floatFromInt(self.filesystem_errors_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0
-        });
-        try writer.print("  WAL corruptions: {}/{} ({d:.2}%)\n", .{
-            self.wal_corruptions_injected,
-            self.total_operations,
-            if (self.total_operations > 0) @as(f64, @floatFromInt(self.wal_corruptions_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0
-        });
-        try writer.print("  IO ring errors: {}/{} ({d:.2}%)\n", .{
-            self.iouring_errors_injected,
-            self.total_operations,
-            if (self.total_operations > 0) @as(f64, @floatFromInt(self.iouring_errors_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0
-        });
+        try writer.print("  Allocator failures: {}/{} ({d:.2}%)\n", .{ self.allocator_failures_injected, self.total_operations, if (self.total_operations > 0) @as(f64, @floatFromInt(self.allocator_failures_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0 });
+        try writer.print("  Filesystem errors: {}/{} ({d:.2}%)\n", .{ self.filesystem_errors_injected, self.total_operations, if (self.total_operations > 0) @as(f64, @floatFromInt(self.filesystem_errors_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0 });
+        try writer.print("  WAL corruptions: {}/{} ({d:.2}%)\n", .{ self.wal_corruptions_injected, self.total_operations, if (self.total_operations > 0) @as(f64, @floatFromInt(self.wal_corruptions_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0 });
+        try writer.print("  IO ring errors: {}/{} ({d:.2}%)\n", .{ self.iouring_errors_injected, self.total_operations, if (self.total_operations > 0) @as(f64, @floatFromInt(self.iouring_errors_injected)) / @as(f64, @floatFromInt(self.total_operations)) * 100.0 else 0.0 });
         try writer.print("  WAL corruptions detected: {}\n", .{self.wal_corruptions_detected});
     }
 };
@@ -256,7 +240,7 @@ pub const TestStatistics = struct {
     invariant_violations: u64 = 0,
     shrinking_iterations: u32 = 0,
     test_execution_time: Duration = 0,
-    
+
     pub fn format(self: TestStatistics, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
@@ -279,9 +263,9 @@ pub const InvariantSeverity = enum {
 
 pub const InvariantChecker = struct {
     name: []const u8,
-    check_fn: *const fn(db: *poro.Database) bool,
+    check_fn: *const fn (db: *poro.Database) bool,
     severity: InvariantSeverity,
-    
+
     pub fn check(self: InvariantChecker, db: *poro.Database) bool {
         return self.check_fn(db);
     }
@@ -331,12 +315,12 @@ pub const PropertyTest = struct {
     invariants: []const InvariantChecker,
     shrinking: ShrinkingConfig,
     seed: u64,
-    
+
     allocator: std.mem.Allocator,
     prng: std.Random.DefaultPrng,
     stats: TestStatistics,
     current_condition: ?SystemCondition = null,
-    
+
     pub fn init(allocator: std.mem.Allocator, config: PropertyTest) PropertyTest {
         return PropertyTest{
             .name = config.name,
@@ -350,48 +334,48 @@ pub const PropertyTest = struct {
             .stats = .{},
         };
     }
-    
+
     pub fn run(self: *PropertyTest, temp_dir: []const u8, iterations: u32) !void {
         const start_time = std.time.nanoTimestamp();
         defer {
             const end_time = std.time.nanoTimestamp();
             self.stats.test_execution_time = @intCast(end_time - start_time);
         }
-        
+
         std.debug.print("Running property test: {s} (seed: {}, iterations: {})\n", .{ self.name, self.seed, iterations });
-        
+
         for (0..iterations) |i| {
             const sequence = try self.generate_operation_sequence();
             defer self.free_operation_sequence(sequence);
-            
+
             const result = self.execute_sequence(temp_dir, sequence) catch |err| switch (err) {
                 PropertyTestingError.InvariantViolation => {
                     std.debug.print("Invariant violation detected in iteration {}, attempting to shrink...\n", .{i});
                     const shrunk = try self.shrink_sequence(temp_dir, sequence);
                     defer self.free_operation_sequence(shrunk);
-                    
+
                     std.debug.print("Shrunk from {} to {} operations\n", .{ sequence.len, shrunk.len });
                     self.print_minimal_reproduction(shrunk);
                     return PropertyTestingError.TestFailed;
                 },
                 else => return err,
             };
-            
+
             if (!result) {
                 return PropertyTestingError.TestFailed;
             }
-            
+
             self.stats.unique_sequences_tested += 1;
-            
+
             if ((i + 1) % 100 == 0) {
                 std.debug.print("Completed {} iterations...\n", .{i + 1});
             }
         }
-        
+
         std.debug.print("Property test completed successfully!\n", .{});
         std.debug.print("{}\n", .{self.stats});
     }
-    
+
     fn generate_operation_sequence(self: *PropertyTest) ![]GeneratedOperation {
         const sequence_length = self.generators.sequence_length.sample(&self.prng);
         const sequence = try self.allocator.alloc(GeneratedOperation, sequence_length);
@@ -402,14 +386,14 @@ pub const PropertyTest = struct {
             }
             generated_keys.deinit();
         }
-        
+
         for (sequence) |*op| {
             const op_type = self.generators.operation_distribution.sample(&self.prng);
-            
+
             op.* = GeneratedOperation{
                 .operation_type = op_type,
             };
-            
+
             switch (op_type) {
                 .set => {
                     op.key = try self.generators.key_generators.generate_key(self.allocator, &self.prng, generated_keys.items);
@@ -448,27 +432,27 @@ pub const PropertyTest = struct {
                     op.expected_result = .restart_success;
                 },
             }
-            
+
             self.stats.total_operations_generated += 1;
         }
-        
+
         return sequence;
     }
-    
+
     fn execute_sequence(self: *PropertyTest, temp_dir: []const u8, sequence: []GeneratedOperation) !bool {
         const intent_wal_path = try std.fmt.allocPrint(self.allocator, "{s}/prop_intent.wal", .{temp_dir});
         defer self.allocator.free(intent_wal_path);
         const completion_wal_path = try std.fmt.allocPrint(self.allocator, "{s}/prop_completion.wal", .{temp_dir});
         defer self.allocator.free(completion_wal_path);
-        
+
         // Clean up existing files
         std.fs.deleteFileAbsolute(intent_wal_path) catch {};
         std.fs.deleteFileAbsolute(completion_wal_path) catch {};
-        
+
         // Set up failure injection
         var simulated_fs: ?filesystem.SimulatedFilesystem = null;
         defer if (simulated_fs) |*fs| fs.deinit();
-        
+
         if (self.failure_injectors.filesystem_error_probability > 0) {
             simulated_fs = filesystem.SimulatedFilesystem.init(self.allocator);
             // Set up filesystem error injection based on probability
@@ -477,28 +461,28 @@ pub const PropertyTest = struct {
                 self.stats.failures_injected.filesystem_errors_injected += 1;
             }
         }
-        
+
         var db_optional: ?poro.Database = poro.Database.init(self.allocator, intent_wal_path, completion_wal_path) catch {
             // Database initialization failure might be expected due to failure injection
             return false;
         };
         defer if (db_optional) |*database| database.deinit();
         var db = &db_optional.?;
-        
+
         // Collect initial WAL corruption statistics
         self.stats.failures_injected.wal_corruptions_detected += db.get_wal_corruption_count();
-        
+
         // Execute operations
         for (sequence) |op| {
             self.stats.failures_injected.total_operations += 1;
-            
+
             // Check for allocator failure injection
             if (self.should_inject_allocator_failure()) {
                 self.stats.failures_injected.allocator_failures_injected += 1;
                 // Skip this operation as if allocation failed
                 continue;
             }
-            
+
             switch (op.operation_type) {
                 .set => {
                     if (op.key != null and op.value != null) {
@@ -537,14 +521,14 @@ pub const PropertyTest = struct {
                     };
                     db_optional = new_db;
                     db = &db_optional.?;
-                    
+
                     // Collect WAL corruption statistics from the restart
                     self.stats.failures_injected.wal_corruptions_detected += db.get_wal_corruption_count();
-                    
+
                     self.current_condition = null;
                 },
             }
-            
+
             // Check invariants
             for (self.invariants) |invariant| {
                 if (!invariant.check(db)) {
@@ -556,45 +540,45 @@ pub const PropertyTest = struct {
                 }
             }
         }
-        
+
         return true;
     }
-    
+
     fn should_inject_allocator_failure(self: *PropertyTest) bool {
         const base_prob = self.failure_injectors.allocator_failure_probability;
         const effective_prob = self.failure_injectors.get_effective_probability(base_prob, self.current_condition);
         return self.prng.random().float(f64) < effective_prob;
     }
-    
+
     fn should_inject_wal_corruption(self: *PropertyTest) bool {
         const base_prob = self.failure_injectors.wal_corruption_probability;
         const effective_prob = self.failure_injectors.get_effective_probability(base_prob, self.current_condition);
         return self.prng.random().float(f64) < effective_prob;
     }
-    
+
     fn should_inject_iouring_error(self: *PropertyTest) bool {
         const base_prob = self.failure_injectors.iouring_error_probability;
         const effective_prob = self.failure_injectors.get_effective_probability(base_prob, self.current_condition);
         return self.prng.random().float(f64) < effective_prob;
     }
-    
+
     fn shrink_sequence(self: *PropertyTest, temp_dir: []const u8, original_sequence: []GeneratedOperation) ![]GeneratedOperation {
         var current_sequence = try self.clone_sequence(original_sequence);
-        
+
         for (0..self.shrinking.max_shrink_attempts) |_| {
             var shrunk = false;
-            
+
             // Try removing operations (simple shrinking strategy)
             if (current_sequence.len > 1) {
                 const remove_index = self.prng.random().uintLessThan(usize, current_sequence.len);
                 var new_sequence = try self.allocator.alloc(GeneratedOperation, current_sequence.len - 1);
-                
+
                 // Copy before and after the removed operation
                 @memcpy(new_sequence[0..remove_index], current_sequence[0..remove_index]);
                 if (remove_index < current_sequence.len - 1) {
-                    @memcpy(new_sequence[remove_index..], current_sequence[remove_index + 1..]);
+                    @memcpy(new_sequence[remove_index..], current_sequence[remove_index + 1 ..]);
                 }
-                
+
                 // Test if the shrunk sequence still fails
                 const still_fails = self.execute_sequence(temp_dir, new_sequence) catch true;
                 if (!still_fails) {
@@ -607,15 +591,15 @@ pub const PropertyTest = struct {
                     self.free_operation_sequence(new_sequence);
                 }
             }
-            
+
             if (!shrunk) {
                 break; // No more shrinking possible
             }
         }
-        
+
         return current_sequence;
     }
-    
+
     fn clone_sequence(self: *PropertyTest, sequence: []GeneratedOperation) ![]GeneratedOperation {
         var cloned = try self.allocator.alloc(GeneratedOperation, sequence.len);
         for (sequence, 0..) |op, i| {
@@ -628,14 +612,14 @@ pub const PropertyTest = struct {
         }
         return cloned;
     }
-    
+
     fn free_operation_sequence(self: *PropertyTest, sequence: []GeneratedOperation) void {
         for (sequence) |op| {
             op.deinit(self.allocator);
         }
         self.allocator.free(sequence);
     }
-    
+
     fn print_minimal_reproduction(self: *PropertyTest, sequence: []GeneratedOperation) void {
         std.debug.print("=== Minimal Reproduction Case ===\n", .{});
         std.debug.print("Seed: {}\n", .{self.seed});
@@ -657,14 +641,14 @@ pub const PropertyTest = struct {
 pub const PropertyTestRunner = struct {
     allocator: std.mem.Allocator,
     temp_dir: []const u8,
-    
+
     pub fn init(allocator: std.mem.Allocator, temp_dir: []const u8) PropertyTestRunner {
         return PropertyTestRunner{
             .allocator = allocator,
             .temp_dir = temp_dir,
         };
     }
-    
+
     pub fn run_test(self: PropertyTestRunner, config: PropertyTest, iterations: u32) !void {
         var test_instance = PropertyTest.init(self.allocator, config);
         try test_instance.run(self.temp_dir, iterations);
@@ -822,7 +806,7 @@ test "Property testing framework basic test" {
     var test_config = basic_property_test;
     test_config.seed = 42;
     test_config.generators.sequence_length = .{ .min = 5, .max = 10 }; // Small test
-    
+
     const runner = PropertyTestRunner.init(std.testing.allocator, "/tmp");
     try runner.run_test(test_config, 5); // Run 5 iterations
 }

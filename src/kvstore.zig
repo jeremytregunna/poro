@@ -90,7 +90,7 @@ pub const KVStore = struct {
         const intent_offset = try self.wal.append_entry(.set, key, value);
 
         const hash = hash_key(key);
-        
+
         // Ensure there is enough capacity before finding a slot
         var index: usize = undefined;
         while (true) {
@@ -175,7 +175,7 @@ pub const KVStore = struct {
     fn find_slot(self: *KVStore, hash: u64, key: []const u8) !usize {
         var index = hash % self.capacity;
         var attempts: usize = 0;
-        
+
         while (attempts < self.capacity) {
             if (self.entries[index]) |*entry| {
                 if (!entry.is_deleted and std.mem.eql(u8, entry.key, key)) {
@@ -187,7 +187,7 @@ pub const KVStore = struct {
             index = (index + 1) % self.capacity;
             attempts += 1;
         }
-        
+
         // Hash table is full - this should trigger a resize
         return error.HashTableFull;
     }
@@ -208,7 +208,7 @@ pub const KVStore = struct {
                 if (!kv.is_deleted) {
                     const index = self.find_slot(kv.hash, kv.key) catch {
                         // This should never happen after resize, but just in case
-                        std.log.err("KVStore: find_slot failed during resize for key: {s} (hash: {x}), possible data loss", .{kv.key, kv.hash});
+                        std.log.err("KVStore: find_slot failed during resize for key: {s} (hash: {x}), possible data loss", .{ kv.key, kv.hash });
                         continue;
                     };
                     self.entries[index] = kv;
@@ -240,7 +240,7 @@ pub const KVStore = struct {
         RecoveryState.store_ptr = self;
         const corruption_count = try self.wal.recovery_read(RecoveryState.callback);
         RecoveryState.store_ptr = null;
-        
+
         return corruption_count;
     }
 

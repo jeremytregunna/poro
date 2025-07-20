@@ -10,42 +10,42 @@ const MAX_ENTRIES = 256;
 
 pub const WALEntry = packed struct {
     // Nanosecond timestamp (278 years range from 1970)
-    timestamp_ns: u64,    // 8 bytes
-    
+    timestamp_ns: u64, // 8 bytes
+
     // 64KB key limit
-    key_len: u16,         // 2 bytes
-    
-    // 1MB value limit - pack into 3 bytes  
-    value_len_low: u16,   // 2 bytes - lower 16 bits
-    value_len_high: u8,   // 1 byte - upper 4 bits (masked)
-    
+    key_len: u16, // 2 bytes
+
+    // 1MB value limit - pack into 3 bytes
+    value_len_low: u16, // 2 bytes - lower 16 bits
+    value_len_high: u8, // 1 byte - upper 4 bits (masked)
+
     // Operation + flags in single byte
     operation_and_flags: u8, // 1 byte
-    
+
     // CRC16 for record integrity
-    record_crc: u16,      // 2 bytes
-    
+    record_crc: u16, // 2 bytes
+
     // key and value data follows immediately after this struct
-    
+
     comptime {
         std.debug.assert(@sizeOf(@This()) == 16);
     }
-    
+
     // Helper methods
     pub fn set_value_len(self: *WALEntry, len: u32) void {
         std.debug.assert(len <= 1_048_576); // 1MB limit
         self.value_len_low = @truncate(len);
         self.value_len_high = @truncate(len >> 16);
     }
-    
+
     pub fn get_value_len(self: WALEntry) u32 {
         return (@as(u32, self.value_len_high) << 16) | @as(u32, self.value_len_low);
     }
-    
+
     pub fn set_operation(self: *WALEntry, op: Operation) void {
         self.operation_and_flags = (self.operation_and_flags & 0xFC) | @intFromEnum(op);
     }
-    
+
     pub fn get_operation(self: WALEntry) Operation {
         const op_value = self.operation_and_flags & 0x03;
         return switch (op_value) {
@@ -54,11 +54,11 @@ pub const WALEntry = packed struct {
             else => .set, // Default to set for invalid values to prevent panic
         };
     }
-    
+
     pub fn get_key_len(self: WALEntry) u32 {
         return @as(u32, self.key_len);
     }
-    
+
     pub fn set_key_len(self: *WALEntry, len: u32) void {
         std.debug.assert(len <= 65_536); // 64KB limit
         self.key_len = @truncate(len);
@@ -75,20 +75,20 @@ pub const WALEntry = packed struct {
 };
 
 pub const CompletionEntry = packed struct {
-    intent_offset: u32,   // 4 bytes
-    timestamp_ns: u64,    // 8 bytes
+    intent_offset: u32, // 4 bytes
+    timestamp_ns: u64, // 8 bytes
     status_and_flags: u8, // 1 byte
-    data_crc: u16,        // 2 bytes
-    padding: u8,          // 1 byte
-    
+    data_crc: u16, // 2 bytes
+    padding: u8, // 1 byte
+
     comptime {
         std.debug.assert(@sizeOf(@This()) == 16);
     }
-    
+
     pub fn set_status(self: *CompletionEntry, status: Status) void {
         self.status_and_flags = (self.status_and_flags & 0xFC) | @intFromEnum(status);
     }
-    
+
     pub fn get_status(self: CompletionEntry) Status {
         const status_value = self.status_and_flags & 0x03;
         return switch (status_value) {
@@ -176,7 +176,7 @@ pub const WAL = struct {
             .operation_and_flags = 0,
             .record_crc = 0,
         };
-        
+
         entry.set_operation(operation);
         entry.set_key_len(@intCast(key.len));
         entry.set_value_len(@intCast(value.len));
@@ -201,7 +201,7 @@ pub const WAL = struct {
         // Calculate CRC16 over header + payload before writing
         const header_bytes = std.mem.asBytes(&entry);
         entry.record_crc = calculate_record_crc(header_bytes[0..14], key, value); // Exclude CRC field itself
-        
+
         // Write entry header (with correct CRC now)
         std.mem.copyForwards(u8, self.intent_buffer[self.intent_write_offset..], std.mem.asBytes(&entry));
         self.intent_write_offset += @sizeOf(WALEntry);
@@ -230,7 +230,7 @@ pub const WAL = struct {
             .data_crc = checksum,
             .padding = 0,
         };
-        
+
         completion.set_status(status);
 
         const completion_size = @sizeOf(CompletionEntry);
@@ -355,8 +355,8 @@ pub const WAL = struct {
             while (completion_offset + @sizeOf(CompletionEntry) <= completion_buffer.len) {
                 // Read completion entry by copying bytes (no alignment assumptions)
                 var completion: CompletionEntry = undefined;
-                std.mem.copyForwards(u8, std.mem.asBytes(&completion), completion_buffer[completion_offset..completion_offset + @sizeOf(CompletionEntry)]);
-                
+                std.mem.copyForwards(u8, std.mem.asBytes(&completion), completion_buffer[completion_offset .. completion_offset + @sizeOf(CompletionEntry)]);
+
                 // Validate completion entry - if the intent_offset is suspiciously large, skip this entry
                 if (completion.intent_offset < @as(u32, @intCast(intent_file_size))) {
                     try completion_map.put(completion.intent_offset, completion);
@@ -373,7 +373,7 @@ pub const WAL = struct {
 
             // Read entry header by copying bytes (no alignment assumptions)
             var entry: WALEntry = undefined;
-            std.mem.copyForwards(u8, std.mem.asBytes(&entry), intent_buffer[intent_offset..intent_offset + @sizeOf(WALEntry)]);
+            std.mem.copyForwards(u8, std.mem.asBytes(&entry), intent_buffer[intent_offset .. intent_offset + @sizeOf(WALEntry)]);
             const entry_start_offset = intent_offset;
             intent_offset += @sizeOf(WALEntry);
 
@@ -381,21 +381,21 @@ pub const WAL = struct {
             const operation_raw = entry.operation_and_flags & 0x03;
             const key_len = entry.get_key_len();
             const value_len = entry.get_value_len();
-            
+
             // Check for completely invalid operation values (beyond our enum range)
             if (operation_raw > 1) { // Only set=0 and del=1 are valid
                 // WAL corruption detected - count and stop parsing
                 corruption_count += 1;
                 break;
             }
-            
+
             // Check for unreasonable sizes
             if (key_len > 65_536 or value_len > 1_048_576) { // Enforce new limits
                 // WAL corruption detected - count and stop parsing
                 corruption_count += 1;
                 break;
             }
-            
+
             // Basic timestamp sanity check (not zero and not too far in future)
             const current_ns = @as(u64, @intCast(std.time.nanoTimestamp()));
             const future_threshold = current_ns + (365 * 24 * 3600 * 1_000_000_000); // 1 year in future
@@ -421,7 +421,7 @@ pub const WAL = struct {
 
             callback(entry.get_operation(), key, value, completed);
         }
-        
+
         return corruption_count;
     }
 
@@ -431,7 +431,7 @@ pub const WAL = struct {
         hasher.update(value);
         return hasher.final();
     }
-    
+
     fn calculate_record_crc(header_bytes: []const u8, key: []const u8, value: []const u8) u16 {
         var hasher = std.hash.crc.Crc16Arc.init();
         hasher.update(header_bytes);

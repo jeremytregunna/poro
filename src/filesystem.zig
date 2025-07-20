@@ -132,7 +132,7 @@ pub const RealFilesystem = struct {
 
     fn open(ctx: *anyopaque, path: []const u8, flags: OpenFlags) anyerror!FileHandle {
         const self: *RealFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         var open_flags: std.fs.File.OpenFlags = .{};
         if (flags.read and flags.write) {
             open_flags.mode = .read_write;
@@ -142,7 +142,7 @@ pub const RealFilesystem = struct {
             open_flags.mode = .read_only;
         }
 
-        const file = if (flags.create) 
+        const file = if (flags.create)
             std.fs.createFileAbsolute(path, .{
                 .read = flags.read,
                 .truncate = flags.truncate,
@@ -166,7 +166,7 @@ pub const RealFilesystem = struct {
 
         const duplicated_path = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(duplicated_path);
-        
+
         return FileHandle{
             .id = handle_id,
             .path = duplicated_path,
@@ -175,7 +175,7 @@ pub const RealFilesystem = struct {
 
     fn close(ctx: *anyopaque, handle: FileHandle) anyerror!void {
         const self: *RealFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.open_files.fetchRemove(handle.id)) |entry| {
             entry.value.close();
             self.allocator.free(handle.path);
@@ -184,7 +184,7 @@ pub const RealFilesystem = struct {
 
     fn read(ctx: *anyopaque, handle: FileHandle, buffer: []u8) anyerror!usize {
         const self: *RealFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         const file = self.open_files.get(handle.id) orelse return FilesystemError.FileNotFound;
         return file.readAll(buffer) catch |err| switch (err) {
             error.InputOutput => return FilesystemError.IoError,
@@ -195,7 +195,7 @@ pub const RealFilesystem = struct {
 
     fn write(ctx: *anyopaque, handle: FileHandle, data: []const u8) anyerror!usize {
         const self: *RealFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         const file = self.open_files.get(handle.id) orelse return FilesystemError.FileNotFound;
         file.writeAll(data) catch |err| switch (err) {
             error.NoSpaceLeft => return FilesystemError.DiskFull,
@@ -208,7 +208,7 @@ pub const RealFilesystem = struct {
 
     fn flush(ctx: *anyopaque, handle: FileHandle) anyerror!void {
         const self: *RealFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         const file = self.open_files.get(handle.id) orelse return FilesystemError.FileNotFound;
         file.sync() catch |err| switch (err) {
             else => return err,
@@ -221,7 +221,7 @@ pub const RealFilesystem = struct {
 
     fn seek(ctx: *anyopaque, handle: FileHandle, offset: u64) anyerror!void {
         const self: *RealFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         const file = self.open_files.get(handle.id) orelse return FilesystemError.FileNotFound;
         file.seekTo(offset) catch |err| switch (err) {
             else => return err,
@@ -230,7 +230,7 @@ pub const RealFilesystem = struct {
 
     fn get_size(ctx: *anyopaque, handle: FileHandle) anyerror!u64 {
         const self: *RealFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         const file = self.open_files.get(handle.id) orelse return FilesystemError.FileNotFound;
         return file.getEndPos() catch |err| switch (err) {
             else => return err,
@@ -239,7 +239,7 @@ pub const RealFilesystem = struct {
 
     fn truncate(ctx: *anyopaque, handle: FileHandle, size: u64) anyerror!void {
         const self: *RealFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         const file = self.open_files.get(handle.id) orelse return FilesystemError.FileNotFound;
         file.setEndPos(size) catch |err| switch (err) {
             error.AccessDenied => return FilesystemError.PermissionDenied,
@@ -349,91 +349,91 @@ pub const SimulatedFilesystem = struct {
 
     fn sim_open(ctx: *anyopaque, path: []const u8, flags: OpenFlags) anyerror!FileHandle {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.open, path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().open(path, flags);
     }
 
     fn sim_close(ctx: *anyopaque, handle: FileHandle) anyerror!void {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.close, handle.path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().close(handle);
     }
 
     fn sim_read(ctx: *anyopaque, handle: FileHandle, buffer: []u8) anyerror!usize {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.read, handle.path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().read(handle, buffer);
     }
 
     fn sim_write(ctx: *anyopaque, handle: FileHandle, data: []const u8) anyerror!usize {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.write, handle.path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().write(handle, data);
     }
 
     fn sim_flush(ctx: *anyopaque, handle: FileHandle) anyerror!void {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.flush, handle.path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().flush(handle);
     }
 
     fn sim_sync(ctx: *anyopaque, handle: FileHandle) anyerror!void {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.sync, handle.path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().sync(handle);
     }
 
     fn sim_seek(ctx: *anyopaque, handle: FileHandle, offset: u64) anyerror!void {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.seek, handle.path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().seek(handle, offset);
     }
 
     fn sim_get_size(ctx: *anyopaque, handle: FileHandle) anyerror!u64 {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.get_size, handle.path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().get_size(handle);
     }
 
     fn sim_truncate(ctx: *anyopaque, handle: FileHandle, size: u64) anyerror!void {
         const self: *SimulatedFilesystem = @ptrCast(@alignCast(ctx));
-        
+
         if (self.check_for_error(.truncate, handle.path)) |err| {
             return err;
         }
-        
+
         return self.real_fs.interface().truncate(handle, size);
     }
 };
